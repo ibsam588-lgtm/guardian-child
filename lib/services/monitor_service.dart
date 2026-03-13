@@ -90,10 +90,7 @@ class MonitorService extends ChangeNotifier {
           permission == LocationPermission.whileInUse) {
         try {
           final pos = await Geolocator.getCurrentPosition(
-            locationSettings: LocationSettings(
-              accuracy: LocationAccuracy.medium,
-              timeLimit: const Duration(seconds: 10),
-            ),
+            locationSettings: LocationSettings(accuracy: LocationAccuracy.medium),
           );
           lat = pos.latitude;
           lng = pos.longitude;

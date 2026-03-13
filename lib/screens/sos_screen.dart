@@ -54,10 +54,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       final permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.always || permission == LocationPermission.whileInUse) {
         final pos = await Geolocator.getCurrentPosition(
-          locationSettings: LocationSettings(
-            accuracy: LocationAccuracy.high,
-            timeLimit: const Duration(seconds: 8),
-          ),
+          locationSettings: LocationSettings(accuracy: LocationAccuracy.high),
         );
         lat = pos.latitude;
         lng = pos.longitude;
@@ -86,9 +83,9 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
 
       // Auto-cancel SOS after 30 seconds (parent will have seen it)
       Timer(const Duration(seconds: 30), () {
-        FirebaseFirestore.instance.collection('children').doc(childId).update({
+        unawaited(FirebaseFirestore.instance.collection('children').doc(childId).update({
           'sosActive': false,
-        });
+        }));
       });
     } catch (e) {
       setState(() { _sending = false; _error = 'Could not send SOS. Try again.'; });
