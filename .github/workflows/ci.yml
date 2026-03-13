@@ -91,6 +91,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Write local.properties
+        run: |
+          echo "flutter.sdk=$(which flutter | xargs dirname | xargs dirname)" > android/local.properties
+          echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
+
       - name: Build App Bundle
         run: flutter build appbundle --release
 
