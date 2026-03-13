@@ -33,6 +33,35 @@
           ]
         }
       }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:913378360413:android:c36202494651161270e1b4",
+        "android_client_info": {
+          "package_name": "com.guardian.child"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "913378360413-4i98i0fdj98gn8r634hv27c9q2hmupk5.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCSgmed57xmEAJm2zKbyIGc5LvX_zYg6Hg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "913378360413-4i98i0fdj98gn8r634hv27c9q2hmupk5.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
     }
   ],
   "configuration_version": "1"
