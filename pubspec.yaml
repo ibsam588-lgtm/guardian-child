@@ -32,7 +32,6 @@ dependencies:
   device_info_plus: ^10.1.2
   permission_handler: ^11.3.1
   battery_plus: ^6.0.3
-  installed_apps: ^1.4.0
 
   # UI
   flutter_svg: ^2.0.10+1

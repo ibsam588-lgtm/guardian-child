@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -81,7 +82,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
       case AppLifecycleState.detached:
         // App is truly being closed — mark offline
         if (childId != null) {
-          context.read<AuthService>().setOffline(childId);
+          unawaited(context.read<AuthService>().setOffline(childId));
         }
         break;
       default:

@@ -51,37 +51,31 @@ class MonitorService extends ChangeNotifier {
   MonitorService(SharedPreferences _);
 
   /// Start monitoring — called after pairing is confirmed
-  Future<void> start(String childId) async {
+  void start(String childId) {
     if (_isRunning) return;
     _isRunning = true;
 
-    // Start native foreground service (keeps process alive)
-    try {
-      await _channel.invokeMethod('startForegroundService');
-    } catch (_) {
-      // Native service started from MainActivity, this is belt-and-suspenders
-    }
+    // Start native foreground service (fire-and-forget)
+    _channel.invokeMethod('startForegroundService').catchError((_) {});
 
     // 30-second heartbeat: location + battery
     _heartbeatTimer = Timer.periodic(
       const Duration(seconds: 30),
-      (_) => _sendHeartbeat(childId),
+      (_) => unawaited(_sendHeartbeat(childId)),
     );
 
     // Listen to app limits pushed down from parent
     _listenToAppLimits(childId);
 
-    // Send first heartbeat immediately
-    _sendHeartbeat(childId);
+    // Send first heartbeat immediately (fire-and-forget)
+    unawaited(_sendHeartbeat(childId));
   }
 
   void stop() {
     _heartbeatTimer?.cancel();
     _limitsSubscription?.cancel();
     _isRunning = false;
-    try {
-      _channel.invokeMethod('stopForegroundService');
-    } catch (_) {}
+    _channel.invokeMethod('stopForegroundService').catchError((_) {});
   }
 
   Future<void> _sendHeartbeat(String childId) async {
@@ -96,9 +90,9 @@ class MonitorService extends ChangeNotifier {
           permission == LocationPermission.whileInUse) {
         try {
           final pos = await Geolocator.getCurrentPosition(
-            locationSettings: AndroidSettings(
+            locationSettings: LocationSettings(
               accuracy: LocationAccuracy.medium,
-              timeLimit: Duration(seconds: 10),
+              timeLimit: const Duration(seconds: 10),
             ),
           );
           lat = pos.latitude;
