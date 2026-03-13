@@ -23,23 +23,23 @@ class AppLimitInfo {
   });
 
   factory AppLimitInfo.fromMap(Map<String, dynamic> d) => AppLimitInfo(
-    packageName: d['packageName'] ?? '',
-    appName: d['appName'] ?? '',
-    dailyLimitMinutes: d['dailyLimitMinutes'] ?? 60,
-    isBlocked: d['dailyLimitMinutes'] == 0 && (d['isEnabled'] ?? true),
-    allowTimeRequests: d['allowTimeRequests'] ?? true,
-  );
+        packageName: d['packageName'] as String? ?? '',
+        appName: d['appName'] as String? ?? '',
+        dailyLimitMinutes: d['dailyLimitMinutes'] as int? ?? 60,
+        isBlocked: (d['dailyLimitMinutes'] as int?) == 0 &&
+            (d['isEnabled'] as bool? ?? true),
+        allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
+      );
 }
 
 class MonitorService extends ChangeNotifier {
+  static const _channel = MethodChannel('com.guardian.child/monitor');
+
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final Battery _battery = Battery();
 
-  // Platform channel to communicate with native foreground service
-  static const _channel = MethodChannel('com.guardian.child/monitor');
-
   Timer? _heartbeatTimer;
-  StreamSubscription? _limitsSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
 
   List<AppLimitInfo> _appLimits = [];
   List<AppLimitInfo> get appLimits => _appLimits;
@@ -48,26 +48,25 @@ class MonitorService extends ChangeNotifier {
   String _lastLocation = 'Unknown';
   String get lastLocation => _lastLocation;
 
+  // ignore: avoid_unused_constructor_parameters
   MonitorService(SharedPreferences _);
 
-  /// Start monitoring — called after pairing is confirmed
   void start(String childId) {
     if (_isRunning) return;
     _isRunning = true;
 
-    // Start native foreground service (fire-and-forget)
-    _channel.invokeMethod('startForegroundService').catchError((_) {});
+    // Tell native Android to start the foreground service
+    _channel.invokeMethod<void>('startForegroundService').ignore();
 
-    // 30-second heartbeat: location + battery
+    // Heartbeat every 30 seconds
     _heartbeatTimer = Timer.periodic(
       const Duration(seconds: 30),
       (_) => unawaited(_sendHeartbeat(childId)),
     );
 
-    // Listen to app limits pushed down from parent
     _listenToAppLimits(childId);
 
-    // Send first heartbeat immediately (fire-and-forget)
+    // First heartbeat immediately
     unawaited(_sendHeartbeat(childId));
   }
 
@@ -75,34 +74,35 @@ class MonitorService extends ChangeNotifier {
     _heartbeatTimer?.cancel();
     _limitsSubscription?.cancel();
     _isRunning = false;
-    _channel.invokeMethod('stopForegroundService').catchError((_) {});
+    _channel.invokeMethod<void>('stopForegroundService').ignore();
   }
 
   Future<void> _sendHeartbeat(String childId) async {
     try {
-      final battery = await _battery.batteryLevel;
+      final batteryLevel = await _battery.batteryLevel;
       String locationStr = _lastLocation;
       double? lat, lng;
 
-      // Location
       final permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.always ||
           permission == LocationPermission.whileInUse) {
         try {
           final pos = await Geolocator.getCurrentPosition(
-            locationSettings: LocationSettings(accuracy: LocationAccuracy.medium),
+            locationSettings: LocationSettings(
+              accuracy: LocationAccuracy.medium,
+            ),
           );
           lat = pos.latitude;
           lng = pos.longitude;
 
-          // Reverse geocode
           try {
-            final placemarks =
+            final marks =
                 await placemarkFromCoordinates(pos.latitude, pos.longitude);
-            if (placemarks.isNotEmpty) {
-              final p = placemarks.first;
+            if (marks.isNotEmpty) {
+              final p = marks.first;
               locationStr = [p.street, p.locality, p.administrativeArea]
-                  .where((s) => s != null && s.isNotEmpty)
+                  .whereType<String>()
+                  .where((s) => s.isNotEmpty)
                   .join(', ');
             }
           } catch (_) {
@@ -111,15 +111,14 @@ class MonitorService extends ChangeNotifier {
           }
           _lastLocation = locationStr;
         } catch (_) {
-          // Location timeout — still send battery update
+          // Location unavailable — still send battery
         }
       }
 
-      // Write to Firestore
       final update = <String, dynamic>{
         'isOnline': true,
         'lastSeen': FieldValue.serverTimestamp(),
-        'batteryLevel': battery / 100.0,
+        'batteryLevel': batteryLevel / 100.0,
       };
       if (locationStr.isNotEmpty && locationStr != 'Unknown') {
         update['lastLocation'] = locationStr;
@@ -149,7 +148,6 @@ class MonitorService extends ChangeNotifier {
     });
   }
 
-  /// Submit a time request to Firestore
   Future<bool> submitTimeRequest({
     required String childId,
     required String childName,
@@ -182,7 +180,6 @@ class MonitorService extends ChangeNotifier {
     }
   }
 
-  /// Watch a specific time request for parent response
   Stream<Map<String, dynamic>?> watchTimeRequest(String requestId) {
     return _db
         .collection('timeRequests')
