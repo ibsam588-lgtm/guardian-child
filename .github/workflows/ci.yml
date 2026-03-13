@@ -73,7 +73,7 @@ jobs:
           DART
 
       - name: Setup keystore
-        if: secrets.KEYSTORE_BASE64 != ''
+        continue-on-error: true
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
