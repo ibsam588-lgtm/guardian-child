@@ -76,7 +76,6 @@ jobs:
           DART
 
       - name: Setup keystore
-        continue-on-error: true
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -85,15 +84,11 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > android/app/keystore.jks
-            cat > android/key.properties << PROPS
-          storePassword=$STORE_PASSWORD
-          keyPassword=$KEY_PASSWORD
-          keyAlias=$KEY_ALIAS
-          storeFile=keystore.jks
-          PROPS
+            printf "storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=keystore.jks\n" \
+              "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
             echo "Keystore configured"
           else
-            echo "No keystore secret set, will use debug signing"
+            echo "No keystore secret – using debug signing"
           fi
 
       - name: Install dependencies
