@@ -11,10 +11,9 @@ class DefaultFirebaseOptions {
     }
   }
 
-  // ── Replace these values with your child app's google-services.json values ──
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'YOUR_CHILD_API_KEY',
-    appId: 'YOUR_CHILD_APP_ID',
+    apiKey: 'AIzaSyCSgmed57xmEAJm2zKbyIGc5LvX_zYg6Hg',
+    appId: '1:913378360413:android:c36202494651161270e1b4',
     messagingSenderId: '913378360413',
     projectId: 'guardian-e28d4',
     storageBucket: 'guardian-e28d4.firebasestorage.app',
