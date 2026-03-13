@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
@@ -35,6 +36,9 @@ class MonitorService extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final Battery _battery = Battery();
 
+  // Platform channel to communicate with native foreground service
+  static const _channel = MethodChannel('com.guardian.child/monitor');
+
   Timer? _heartbeatTimer;
   StreamSubscription? _limitsSubscription;
 
@@ -48,17 +52,24 @@ class MonitorService extends ChangeNotifier {
   MonitorService(this._prefs);
 
   /// Start monitoring — called after pairing is confirmed
-  void start(String childId) {
+  Future<void> start(String childId) async {
     if (_isRunning) return;
     _isRunning = true;
 
-    // Heartbeat every 2 minutes: location + battery
+    // Start native foreground service (keeps process alive)
+    try {
+      await _channel.invokeMethod('startForegroundService');
+    } catch (_) {
+      // Native service started from MainActivity, this is belt-and-suspenders
+    }
+
+    // 30-second heartbeat: location + battery
     _heartbeatTimer = Timer.periodic(
       const Duration(seconds: 30),
       (_) => _sendHeartbeat(childId),
     );
 
-    // Listen to app limits from parent
+    // Listen to app limits pushed down from parent
     _listenToAppLimits(childId);
 
     // Send first heartbeat immediately
@@ -69,52 +80,64 @@ class MonitorService extends ChangeNotifier {
     _heartbeatTimer?.cancel();
     _limitsSubscription?.cancel();
     _isRunning = false;
+    try {
+      _channel.invokeMethod('stopForegroundService');
+    } catch (_) {}
   }
 
   Future<void> _sendHeartbeat(String childId) async {
     try {
       final battery = await _battery.batteryLevel;
       String locationStr = _lastLocation;
+      double? lat, lng;
 
       // Location
       final permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.always ||
           permission == LocationPermission.whileInUse) {
-        final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.medium,
-          timeLimit: const Duration(seconds: 10),
-        );
-
-        // Reverse geocode to a human-readable string
         try {
-          final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
-          if (placemarks.isNotEmpty) {
-            final p = placemarks.first;
-            locationStr = [p.street, p.locality, p.administrativeArea]
-                .where((s) => s != null && s.isNotEmpty)
-                .join(', ');
+          final pos = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.medium,
+            timeLimit: const Duration(seconds: 10),
+          );
+          lat = pos.latitude;
+          lng = pos.longitude;
+
+          // Reverse geocode
+          try {
+            final placemarks =
+                await placemarkFromCoordinates(pos.latitude, pos.longitude);
+            if (placemarks.isNotEmpty) {
+              final p = placemarks.first;
+              locationStr = [p.street, p.locality, p.administrativeArea]
+                  .where((s) => s != null && s.isNotEmpty)
+                  .join(', ');
+            }
+          } catch (_) {
+            locationStr =
+                '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
           }
+          _lastLocation = locationStr;
         } catch (_) {
-          locationStr = '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
+          // Location timeout — still send battery update
         }
-
-        _lastLocation = locationStr;
-
-        await _db.collection('children').doc(childId).update({
-          'isOnline': true,
-          'lastSeen': FieldValue.serverTimestamp(),
-          'batteryLevel': battery / 100.0,
-          'lastLocation': locationStr,
-          'lastLat': pos.latitude,
-          'lastLng': pos.longitude,
-        });
-      } else {
-        await _db.collection('children').doc(childId).update({
-          'isOnline': true,
-          'lastSeen': FieldValue.serverTimestamp(),
-          'batteryLevel': battery / 100.0,
-        });
       }
+
+      // Write to Firestore
+      final update = <String, dynamic>{
+        'isOnline': true,
+        'lastSeen': FieldValue.serverTimestamp(),
+        'batteryLevel': battery / 100.0,
+      };
+      if (locationStr.isNotEmpty && locationStr != 'Unknown') {
+        update['lastLocation'] = locationStr;
+      }
+      if (lat != null && lng != null) {
+        update['lastLat'] = lat;
+        update['lastLng'] = lng;
+      }
+
+      await _db.collection('children').doc(childId).update(update);
       notifyListeners();
     } catch (e) {
       debugPrint('Heartbeat error: $e');
@@ -128,14 +151,13 @@ class MonitorService extends ChangeNotifier {
         .collection('appLimits')
         .snapshots()
         .listen((snap) {
-      _appLimits = snap.docs
-          .map((d) => AppLimitInfo.fromMap(d.data()))
-          .toList();
+      _appLimits =
+          snap.docs.map((d) => AppLimitInfo.fromMap(d.data())).toList();
       notifyListeners();
     });
   }
 
-  /// Submit a time request to Firestore — parent app sees it in real time
+  /// Submit a time request to Firestore
   Future<bool> submitTimeRequest({
     required String childId,
     required String childName,
@@ -158,7 +180,8 @@ class MonitorService extends ChangeNotifier {
         'childNote': childNote,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
-        'expiresAt': Timestamp.fromDate(now.add(const Duration(minutes: 10))),
+        'expiresAt': Timestamp.fromDate(
+            now.add(const Duration(minutes: 10))),
       });
       return true;
     } catch (e) {

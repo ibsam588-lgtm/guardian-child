@@ -17,13 +17,11 @@ void main() async {
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // Lock to portrait
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
 
-  // Transparent status bar
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.dark,
@@ -51,13 +49,45 @@ class GuardianChildApp extends StatefulWidget {
   State<GuardianChildApp> createState() => _GuardianChildAppState();
 }
 
-class _GuardianChildAppState extends State<GuardianChildApp> {
+class _GuardianChildAppState extends State<GuardianChildApp>
+    with WidgetsBindingObserver {
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<FcmService>().init(context);
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final pairing = context.read<PairingService>();
+    final monitor = context.read<MonitorService>();
+    final childId = pairing.childId;
+
+    switch (state) {
+      case AppLifecycleState.resumed:
+        // App came back to foreground — resume heartbeat if paired
+        if (childId != null) monitor.start(childId);
+        break;
+      case AppLifecycleState.detached:
+        // App is truly being closed — mark offline
+        if (childId != null) {
+          context.read<AuthService>().setOffline(childId);
+        }
+        break;
+      default:
+        // paused / hidden — foreground service keeps running, no action needed
+        break;
+    }
   }
 
   @override
