@@ -54,8 +54,10 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       final permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.always || permission == LocationPermission.whileInUse) {
         final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 8),
+          locationSettings: const AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 8),
+          ),
         );
         lat = pos.latitude;
         lng = pos.longitude;
@@ -145,7 +147,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: AppTheme.secondary.withOpacity(0.15 - (i * 0.04)),
+                        color: AppTheme.secondary.withValues(alpha: 0.15 - (i * 0.04)),
                         width: 2,
                       ),
                     ),
@@ -160,7 +162,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
                       color: AppTheme.secondary,
                       boxShadow: [
                         BoxShadow(
-                          color: AppTheme.secondary.withOpacity(0.5),
+                          color: AppTheme.secondary.withValues(alpha: 0.5),
                           blurRadius: 24 + (_pulseCtrl.value * 12),
                           spreadRadius: 4,
                         ),
@@ -204,7 +206,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
         Container(
           width: 100, height: 100,
           decoration: BoxDecoration(
-            color: AppTheme.accent.withOpacity(0.15),
+            color: AppTheme.accent.withValues(alpha: 0.15),
             shape: BoxShape.circle,
           ),
           child: Icon(Icons.check_circle_rounded, color: AppTheme.accent, size: 60),

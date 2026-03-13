@@ -82,7 +82,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Container(
                   width: 56, height: 56,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
+                    color: Colors.white.withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(Icons.person_rounded, color: Colors.white, size: 30),
@@ -97,7 +97,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     Text(
                       'Paired device',
-                      style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 13),
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 13),
                     ),
                   ],
                 ),
@@ -126,7 +126,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: AppTheme.accent.withOpacity(0.12),
+                color: AppTheme.accent.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text('On', style: TextStyle(color: AppTheme.accent, fontWeight: FontWeight.w600, fontSize: 12)),
@@ -138,7 +138,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: AppTheme.accent.withOpacity(0.12),
+                color: AppTheme.accent.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text('On', style: TextStyle(color: AppTheme.accent, fontWeight: FontWeight.w600, fontSize: 12)),
@@ -152,9 +152,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: AppTheme.secondary.withOpacity(0.06),
+                color: AppTheme.secondary.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppTheme.secondary.withOpacity(0.3)),
+                border: Border.all(color: AppTheme.secondary.withValues(alpha: 0.3)),
               ),
               child: Row(
                 children: [
@@ -168,7 +168,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           style: TextStyle(color: AppTheme.secondary, fontWeight: FontWeight.w700, fontSize: 15),
                         ),
                         Text('Disconnect from parent account',
-                          style: TextStyle(color: AppTheme.secondary.withOpacity(0.7), fontSize: 12),
+                          style: TextStyle(color: AppTheme.secondary.withValues(alpha: 0.7), fontSize: 12),
                         ),
                       ],
                     ),
@@ -212,7 +212,7 @@ class _SettingsTile extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white, borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8)],
       ),
       child: Row(
         children: [

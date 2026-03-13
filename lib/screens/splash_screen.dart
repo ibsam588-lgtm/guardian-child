@@ -76,7 +76,7 @@ class _SplashScreenState extends State<SplashScreen>
                   width: 100,
                   height: 100,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
+                    color: Colors.white.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(28),
                   ),
                   child: const Icon(Icons.shield_rounded, size: 60, color: Colors.white),
@@ -94,7 +94,7 @@ class _SplashScreenState extends State<SplashScreen>
                 const SizedBox(height: 6),
                 Text(
                   'Stay safe. Stay connected.',
-                  style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 15),
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 15),
                 ),
               ],
             ),

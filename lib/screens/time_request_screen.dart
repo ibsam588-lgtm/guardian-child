@@ -27,7 +27,6 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
   final TextEditingController _noteCtrl = TextEditingController();
   bool _sending = false;
   bool _sent = false;
-  String? _requestId;
   String _status = 'pending';
   StreamSubscription? _watchSub;
 
@@ -74,7 +73,6 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
 
     if (ok) {
       setState(() { _sent = true; });
-      // TODO: capture the returned doc ID to watch it
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not send request. Please try again.')),
@@ -118,7 +116,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: AppTheme.primary.withOpacity(0.08),
+            color: AppTheme.primary.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(16),
           ),
           child: Row(
@@ -126,7 +124,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
               Container(
                 width: 44, height: 44,
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.15),
+                  color: AppTheme.primary.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(Icons.apps_rounded, color: AppTheme.primary),
@@ -168,7 +166,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
                       width: 2,
                     ),
                     boxShadow: selected ? [
-                      BoxShadow(color: AppTheme.primary.withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4)),
+                      BoxShadow(color: AppTheme.primary.withValues(alpha: 0.3), blurRadius: 12, offset: const Offset(0, 4)),
                     ] : [],
                   ),
                   child: Column(
@@ -279,7 +277,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: statusColor.withOpacity(0.08),
+            color: statusColor.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(16),
           ),
           child: Row(
@@ -296,7 +294,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: statusColor.withOpacity(0.08),
+            color: statusColor.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(16),
           ),
           child: Row(

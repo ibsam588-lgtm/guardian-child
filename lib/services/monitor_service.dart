@@ -32,7 +32,6 @@ class AppLimitInfo {
 }
 
 class MonitorService extends ChangeNotifier {
-  final SharedPreferences _prefs;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final Battery _battery = Battery();
 
@@ -49,7 +48,7 @@ class MonitorService extends ChangeNotifier {
   String _lastLocation = 'Unknown';
   String get lastLocation => _lastLocation;
 
-  MonitorService(this._prefs);
+  MonitorService(SharedPreferences _);
 
   /// Start monitoring — called after pairing is confirmed
   Future<void> start(String childId) async {
@@ -97,8 +96,10 @@ class MonitorService extends ChangeNotifier {
           permission == LocationPermission.whileInUse) {
         try {
           final pos = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.medium,
-            timeLimit: const Duration(seconds: 10),
+            locationSettings: const AndroidSettings(
+              accuracy: LocationAccuracy.medium,
+              timeLimit: Duration(seconds: 10),
+            ),
           );
           lat = pos.latitude;
           lng = pos.longitude;
