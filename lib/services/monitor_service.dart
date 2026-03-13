@@ -54,7 +54,7 @@ class MonitorService extends ChangeNotifier {
 
     // Heartbeat every 2 minutes: location + battery
     _heartbeatTimer = Timer.periodic(
-      const Duration(minutes: 2),
+      const Duration(seconds: 30),
       (_) => _sendHeartbeat(childId),
     );
 
