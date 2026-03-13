@@ -40,7 +40,6 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
   void initState() {
     super.initState();
     if (widget.requestId != null) {
-      _requestId = widget.requestId;
       _sent = true;
       _watchRequest(widget.requestId!);
     }

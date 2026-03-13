@@ -96,7 +96,7 @@ class MonitorService extends ChangeNotifier {
           permission == LocationPermission.whileInUse) {
         try {
           final pos = await Geolocator.getCurrentPosition(
-            locationSettings: const AndroidSettings(
+            locationSettings: AndroidSettings(
               accuracy: LocationAccuracy.medium,
               timeLimit: Duration(seconds: 10),
             ),
