@@ -1,4 +1,4 @@
-package com.corsairlabs.guardian.child
+package com.guardian.child
 
 import android.os.Bundle
 import io.flutter.embedding.android.FlutterActivity

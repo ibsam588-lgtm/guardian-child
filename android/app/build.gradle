@@ -12,7 +12,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace "com.corsairlabs.guardian.child"
+    namespace "com.guardian.child"
     compileSdk flutter.compileSdkVersion
     ndkVersion flutter.ndkVersion
 
@@ -24,7 +24,7 @@ android {
     kotlinOptions { jvmTarget = '17' }
 
     defaultConfig {
-        applicationId "com.corsairlabs.guardian.child"
+        applicationId "com.guardian.child"
         minSdk 23
         targetSdk flutter.targetSdkVersion
         versionCode flutter.versionCode
