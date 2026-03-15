@@ -17,10 +17,10 @@ jobs:
     name: Analyze & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
 
       - name: Setup Flutter
-        uses: subosito/flutter-action@v2.14.0
+        uses: subosito/flutter-action@v2.21.0
         with:
           flutter-version: '3.27.0'
           channel: stable
@@ -52,16 +52,16 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
 
       - name: Setup Java
-        uses: actions/setup-java@v4.7.0
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Setup Flutter
-        uses: subosito/flutter-action@v2.14.0
+        uses: subosito/flutter-action@v2.21.0
         with:
           flutter-version: '3.27.0'
           channel: stable
@@ -98,7 +98,7 @@ jobs:
         run: flutter build appbundle --release
 
       - name: Upload AAB
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: guardian-child-release-aab
           path: build/app/outputs/bundle/release/app-release.aab
@@ -113,10 +113,10 @@ jobs:
     needs: build-android
     if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
 
       - name: Download AAB
-        uses: actions/download-artifact@v4.2.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: guardian-child-release-aab
 
