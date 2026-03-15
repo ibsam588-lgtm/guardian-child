@@ -24,7 +24,16 @@ jobs:
         with:
           flutter-version: '3.27.0'
           channel: stable
-          cache: true
+          cache: false
+
+      - name: Cache Flutter SDK
+        uses: actions/cache@v5.6.3
+        with:
+          path: |
+            ~/.pub-cache
+            /opt/hostedtoolcache/flutter
+          key: flutter-3.27.0-${{ runner.os }}
+          restore-keys: flutter-3.27.0-
 
       - name: Create secrets stub
         run: |
@@ -65,7 +74,16 @@ jobs:
         with:
           flutter-version: '3.27.0'
           channel: stable
-          cache: true
+          cache: false
+
+      - name: Cache Flutter SDK
+        uses: actions/cache@v5.6.3
+        with:
+          path: |
+            ~/.pub-cache
+            /opt/hostedtoolcache/flutter
+          key: flutter-3.27.0-${{ runner.os }}
+          restore-keys: flutter-3.27.0-
 
       - name: Create secrets stub
         run: |
