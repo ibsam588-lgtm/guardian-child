@@ -128,7 +128,8 @@ class MonitorService extends ChangeNotifier {
         update['lastLng'] = lng;
       }
 
-      await _db.collection('children').doc(childId).update(update);
+      // Use set+merge so it works even if the doc doesn't exist yet
+      await _db.collection('children').doc(childId).set(update, SetOptions(merge: true));
       notifyListeners();
     } catch (e) {
       debugPrint('Heartbeat error: $e');

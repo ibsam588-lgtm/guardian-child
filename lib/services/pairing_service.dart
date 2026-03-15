@@ -58,14 +58,14 @@ class PairingService extends ChangeNotifier {
       final battery = Battery();
       final batteryLevel = await battery.batteryLevel / 100.0;
 
-      // Update child profile with this device
-      await _db.collection('children').doc(childId).update({
+      // Use set+merge so it works even if doc structure changed
+      await _db.collection('children').doc(childId).set({
         'deviceId': android.id,
         'deviceName': deviceName,
         'isOnline': true,
         'lastSeen': FieldValue.serverTimestamp(),
         'batteryLevel': batteryLevel,
-      });
+      }, SetOptions(merge: true));
 
       // Mark code as used
       await _db.collection('pairing_codes').doc(code.trim().toUpperCase()).update({

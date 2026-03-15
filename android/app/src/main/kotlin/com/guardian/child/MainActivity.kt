@@ -11,14 +11,13 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Start foreground service immediately so it survives before Flutter loads
-        MonitorService.start(this)
+        // NOTE: Do NOT start MonitorService here — it needs location permission
+        // and the child must be paired first. Flutter controls it via MethodChannel.
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Platform channel so Flutter can control the native service
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
