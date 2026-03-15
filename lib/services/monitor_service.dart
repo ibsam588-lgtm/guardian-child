@@ -33,7 +33,7 @@ class AppLimitInfo {
 }
 
 class MonitorService extends ChangeNotifier {
-  static const _channel = MethodChannel('com.guardian.child/monitor');
+  static const _channel = MethodChannel('com.corsairlabs.guardian.child/monitor');
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final Battery _battery = Battery();

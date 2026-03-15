@@ -1,4 +1,4 @@
-package com.guardian.child
+package com.corsairlabs.guardian.child
 
 import android.os.Bundle
 import io.flutter.embedding.android.FlutterActivity
@@ -7,7 +7,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 
-    private val CHANNEL = "com.guardian.child/monitor"
+    private val CHANNEL = "com.corsairlabs.guardian.child/monitor"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

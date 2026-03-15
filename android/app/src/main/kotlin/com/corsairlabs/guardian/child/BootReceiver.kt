@@ -1,4 +1,4 @@
-package com.guardian.child
+package com.corsairlabs.guardian.child
 
 import android.content.BroadcastReceiver
 import android.content.Context

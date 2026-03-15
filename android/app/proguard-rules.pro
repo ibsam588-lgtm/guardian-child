@@ -7,7 +7,7 @@
 -keep class com.google.android.gms.** { *; }
 
 # Guardian app
--keep class com.guardian.child.** { *; }
+-keep class com.corsairlabs.guardian.child.** { *; }
 
 # Suppress missing class warnings
 -dontwarn com.google.android.play.core.**
