@@ -51,6 +51,7 @@ void main() async {
 
 class GuardianChildApp extends StatefulWidget {
   const GuardianChildApp({super.key});
+
   @override
   State<GuardianChildApp> createState() => _GuardianChildAppState();
 }
@@ -58,19 +59,13 @@ class GuardianChildApp extends StatefulWidget {
 class _GuardianChildAppState extends State<GuardianChildApp>
     with WidgetsBindingObserver {
 
-  // ── CRITICAL FIX: Cache the router so it's only built ONCE ──────────────
-  // Building a new GoRouter on every rebuild resets navigation state.
-  late final GoRouter _router;
+  // Cache the router so it's NEVER rebuilt — rebuilding resets navigation
+  GoRouter? _router;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
-    // Build router once, using the PairingService instance
-    final pairing = context.read<PairingService>();
-    _router = _buildRouter(pairing);
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<FcmService>().init(context);
     });
@@ -79,7 +74,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _router.dispose();
+    _router?.dispose();
     super.dispose();
   }
 
@@ -106,7 +101,6 @@ class _GuardianChildAppState extends State<GuardianChildApp>
   GoRouter _buildRouter(PairingService pairing) {
     return GoRouter(
       initialLocation: '/splash',
-      // Refresh router when pairing state changes so redirects re-evaluate
       refreshListenable: pairing,
       redirect: (context, state) {
         final atSplash = state.matchedLocation == '/splash';
@@ -129,9 +123,9 @@ class _GuardianChildAppState extends State<GuardianChildApp>
           builder: (_, state) {
             final extra = state.extra as Map<String, dynamic>? ?? {};
             return TimeRequestScreen(
-              appName: extra['appName'] ?? 'an app',
-              packageName: extra['packageName'] ?? '',
-              requestId: extra['requestId'],
+              appName: extra['appName'] as String? ?? 'an app',
+              packageName: extra['packageName'] as String? ?? '',
+              requestId: extra['requestId'] as String?,
             );
           },
         ),
@@ -142,10 +136,14 @@ class _GuardianChildAppState extends State<GuardianChildApp>
 
   @override
   Widget build(BuildContext context) {
+    final pairing = context.read<PairingService>();
+    // Build router once and cache it — never rebuild
+    _router ??= _buildRouter(pairing);
+
     return MaterialApp.router(
       title: 'GuardIan Child',
       theme: AppTheme.childTheme(),
-      routerConfig: _router,
+      routerConfig: _router!,
       debugShowCheckedModeBanner: false,
     );
   }
