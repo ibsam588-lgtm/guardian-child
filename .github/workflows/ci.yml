@@ -113,7 +113,7 @@ jobs:
         run: flutter pub get
 
       - name: Build App Bundle
-        run: flutter build appbundle --release
+        run: flutter build appbundle --release --build-number=${{ github.run_number }}
 
       - name: Upload AAB
         uses: actions/upload-artifact@v7.0.0
@@ -139,7 +139,6 @@ jobs:
           name: guardian-child-release-aab
 
       - name: Deploy to Play Store
-        continue-on-error: true
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
@@ -147,3 +146,4 @@ jobs:
           releaseFiles: app-release.aab
           track: internal
           status: completed
+          changesNotSentForReview: true
