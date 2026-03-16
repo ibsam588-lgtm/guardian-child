@@ -23,13 +23,12 @@ class AppLimitInfo {
   });
 
   factory AppLimitInfo.fromMap(Map<String, dynamic> d) => AppLimitInfo(
-        packageName: d['packageName'] as String? ?? '',
-        appName: d['appName'] as String? ?? '',
-        dailyLimitMinutes: d['dailyLimitMinutes'] as int? ?? 60,
-        isBlocked: (d['dailyLimitMinutes'] as int?) == 0 &&
-            (d['isEnabled'] as bool? ?? true),
-        allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
-      );
+    packageName: d['packageName'] as String? ?? '',
+    appName: d['appName'] as String? ?? '',
+    dailyLimitMinutes: d['dailyLimitMinutes'] as int? ?? 60,
+    isBlocked: (d['dailyLimitMinutes'] as int?) == 0 && (d['isEnabled'] as bool? ?? true),
+    allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
+  );
 }
 
 class MonitorService extends ChangeNotifier {
@@ -55,8 +54,8 @@ class MonitorService extends ChangeNotifier {
     if (_isRunning) return;
     _isRunning = true;
 
-    // Tell native Android to start the foreground service
-    _channel.invokeMethod<void>('startForegroundService').ignore();
+    // Start foreground service — gracefully ignore if native side isn't ready
+    _startForegroundService();
 
     // Heartbeat every 30 seconds
     _heartbeatTimer = Timer.periodic(
@@ -70,11 +69,28 @@ class MonitorService extends ChangeNotifier {
     unawaited(_sendHeartbeat(childId));
   }
 
+  Future<void> _startForegroundService() async {
+    try {
+      await _channel.invokeMethod<void>('startForegroundService');
+    } on MissingPluginException {
+      // Native side not implemented — that's OK, location still works
+      debugPrint('MonitorService: foreground service channel not available');
+    } catch (e) {
+      debugPrint('MonitorService: foreground service error: $e');
+    }
+  }
+
   void stop() {
     _heartbeatTimer?.cancel();
     _limitsSubscription?.cancel();
     _isRunning = false;
-    _channel.invokeMethod<void>('stopForegroundService').ignore();
+    _stopForegroundService();
+  }
+
+  Future<void> _stopForegroundService() async {
+    try {
+      await _channel.invokeMethod<void>('stopForegroundService');
+    } catch (_) {}
   }
 
   Future<void> _sendHeartbeat(String childId) async {
@@ -83,53 +99,55 @@ class MonitorService extends ChangeNotifier {
       String locationStr = _lastLocation;
       double? lat, lng;
 
-      final permission = await Geolocator.checkPermission();
+      // Request location permission if not granted
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
       if (permission == LocationPermission.always ||
           permission == LocationPermission.whileInUse) {
         try {
           final pos = await Geolocator.getCurrentPosition(
-            locationSettings: LocationSettings(
-              accuracy: LocationAccuracy.medium,
-            ),
-          );
+            locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+          ).timeout(const Duration(seconds: 10));
           lat = pos.latitude;
           lng = pos.longitude;
 
           try {
-            final marks =
-                await placemarkFromCoordinates(pos.latitude, pos.longitude);
+            final marks = await placemarkFromCoordinates(pos.latitude, pos.longitude)
+                .timeout(const Duration(seconds: 5));
             if (marks.isNotEmpty) {
-              final p = marks.first;
-              locationStr = [p.street, p.locality, p.administrativeArea]
-                  .whereType<String>()
-                  .where((s) => s.isNotEmpty)
-                  .join(', ');
+              final m = marks.first;
+              locationStr = [
+                m.street, m.subLocality, m.locality, m.administrativeArea,
+              ].where((s) => s != null && s.isNotEmpty).take(2).join(', ');
+              if (locationStr.isEmpty) {
+                locationStr = '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
+              }
             }
           } catch (_) {
-            locationStr =
-                '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
+            locationStr = '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
           }
-          _lastLocation = locationStr;
-        } catch (_) {
-          // Location unavailable — still send battery
+
+          if (locationStr.isNotEmpty) _lastLocation = locationStr;
+        } catch (e) {
+          debugPrint('Location error: $e');
         }
       }
 
-      final update = <String, dynamic>{
+      final Map<String, dynamic> update = {
         'isOnline': true,
         'lastSeen': FieldValue.serverTimestamp(),
         'batteryLevel': batteryLevel / 100.0,
+        'lastLocation': locationStr,
       };
-      if (locationStr.isNotEmpty && locationStr != 'Unknown') {
-        update['lastLocation'] = locationStr;
-      }
       if (lat != null && lng != null) {
         update['lastLat'] = lat;
         update['lastLng'] = lng;
       }
 
-      // Use set+merge so it works even if the doc doesn't exist yet
-      await _db.collection('children').doc(childId).set(update, SetOptions(merge: true));
+      await _db.collection('children').doc(childId).update(update);
       notifyListeners();
     } catch (e) {
       debugPrint('Heartbeat error: $e');
@@ -143,55 +161,8 @@ class MonitorService extends ChangeNotifier {
         .collection('appLimits')
         .snapshots()
         .listen((snap) {
-      _appLimits =
-          snap.docs.map((d) => AppLimitInfo.fromMap(d.data())).toList();
+      _appLimits = snap.docs.map((d) => AppLimitInfo.fromMap(d.data())).toList();
       notifyListeners();
-    });
-  }
-
-  Future<bool> submitTimeRequest({
-    required String childId,
-    required String childName,
-    required String parentUid,
-    required String appName,
-    required String packageName,
-    required int requestedMinutes,
-    String? childNote,
-  }) async {
-    try {
-      final now = DateTime.now();
-      await _db.collection('timeRequests').add({
-        'childId': childId,
-        'childName': childName,
-        'parentUid': parentUid,
-        'appName': appName,
-        'packageName': packageName,
-        'appIconColor': '#6C63FF',
-        'requestedMinutes': requestedMinutes,
-        'childNote': childNote,
-        'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(),
-        'expiresAt': Timestamp.fromDate(
-            now.add(const Duration(minutes: 10))),
-      });
-      return true;
-    } catch (e) {
-      debugPrint('TimeRequest error: $e');
-      return false;
-    }
-  }
-
-  Stream<Map<String, dynamic>?> watchTimeRequest(String requestId) {
-    return _db
-        .collection('timeRequests')
-        .doc(requestId)
-        .snapshots()
-        .map((s) => s.data());
-  }
-
-  @override
-  void dispose() {
-    stop();
-    super.dispose();
+    }, onError: (e) => debugPrint('App limits error: $e'));
   }
 }

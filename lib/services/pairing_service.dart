@@ -25,7 +25,7 @@ class PairingService extends ChangeNotifier {
     try {
       final codeDoc = await _db
           .collection('pairing_codes')
-          .doc(code.trim().toUpperCase())
+          .doc(code.trim())
           .get();
 
       if (!codeDoc.exists) {
@@ -68,7 +68,7 @@ class PairingService extends ChangeNotifier {
       }, SetOptions(merge: true));
 
       // Mark code as used
-      await _db.collection('pairing_codes').doc(code.trim().toUpperCase()).update({
+      await _db.collection('pairing_codes').doc(code.trim()).update({
         'used': true,
         'usedAt': FieldValue.serverTimestamp(),
       });
