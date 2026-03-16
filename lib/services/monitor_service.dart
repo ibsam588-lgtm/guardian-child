@@ -190,38 +190,3 @@ class MonitorService extends ChangeNotifier {
     );
   }
 }
-
-  // ── Time Requests ──────────────────────────────────────────────────────
-  Future<bool> submitTimeRequest({
-    required String childId,
-    required String childName,
-    required String parentUid,
-    required String appName,
-    required String packageName,
-    required int requestedMinutes,
-    String? childNote,
-  }) async {
-    try {
-      await _db.collection('timeRequests').add({
-        'childId': childId,
-        'childName': childName,
-        'parentUid': parentUid,
-        'appName': appName,
-        'packageName': packageName,
-        'requestedMinutes': requestedMinutes,
-        'childNote': childNote ?? '',
-        'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      return true;
-    } catch (e) {
-      debugPrint('submitTimeRequest error: $e');
-      return false;
-    }
-  }
-
-  Stream<Map<String, dynamic>?> watchTimeRequest(String id) {
-    return _db.collection('timeRequests').doc(id).snapshots().map(
-      (snap) => snap.exists ? snap.data() : null,
-    );
-  }
