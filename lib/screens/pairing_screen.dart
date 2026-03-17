@@ -57,8 +57,8 @@ class _PairingScreenState extends State<PairingScreen> {
     setState(() => _loading = false);
 
     if (result == PairingResult.success) {
-      context.read<MonitorService>().start(pairing.childId!);
-      context.go('/home');
+      // Start monitor only after permissions are granted (handled in permissions screen)
+      context.go('/permissions');
     } else {
       setState(() => _error = result.message);
       // Clear fields on error

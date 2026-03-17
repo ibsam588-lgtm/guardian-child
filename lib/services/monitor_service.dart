@@ -92,9 +92,8 @@ class MonitorService extends ChangeNotifier {
       double? lat, lng;
 
       LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
+      // Don't request permission here — it's handled in PermissionsScreen
+      // Just skip location if not granted
 
       if (permission == LocationPermission.always ||
           permission == LocationPermission.whileInUse) {

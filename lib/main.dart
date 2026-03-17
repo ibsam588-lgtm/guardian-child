@@ -18,6 +18,7 @@ import 'screens/home_screen.dart';
 import 'screens/sos_screen.dart';
 import 'screens/time_request_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/permissions_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -108,14 +109,17 @@ class _GuardianChildAppState extends State<GuardianChildApp>
 
         final isPaired = pairing.isPaired;
         final atPairing = state.matchedLocation == '/pair';
+        final atPermissions = state.matchedLocation == '/permissions';
 
         if (!isPaired && !atPairing) return '/pair';
         if (isPaired && atPairing) return '/home';
+        if (isPaired && atPermissions) return null; // allow permissions screen
         return null;
       },
       routes: [
         GoRoute(path: '/splash', builder: (_, __) => const SplashScreen()),
         GoRoute(path: '/pair',   builder: (_, __) => const PairingScreen()),
+        GoRoute(path: '/permissions', builder: (_, __) => const PermissionsScreen()),
         GoRoute(path: '/home',   builder: (_, __) => const HomeScreen()),
         GoRoute(path: '/sos',    builder: (_, __) => const SosScreen()),
         GoRoute(

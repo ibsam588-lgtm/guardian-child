@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/pairing_service.dart';
 import '../services/monitor_service.dart';
 import '../theme/app_theme.dart';
@@ -15,6 +16,9 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _version = '';
+  bool _locationGranted = false;
+  bool _notificationGranted = false;
+  bool _bgLocationGranted = false;
 
   @override
   void initState() {
@@ -22,6 +26,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     PackageInfo.fromPlatform().then((info) {
       if (mounted) setState(() => _version = info.version);
     });
+    _checkPermissions();
+  }
+
+  Future<void> _checkPermissions() async {
+    final loc = await Permission.locationWhenInUse.status;
+    final notif = await Permission.notification.status;
+    final bgLoc = await Permission.locationAlways.status;
+    if (mounted) {
+      setState(() {
+        _locationGranted = loc.isGranted;
+        _notificationGranted = notif.isGranted;
+        _bgLocationGranted = bgLoc.isGranted;
+      });
+    }
+  }
+
+  Future<void> _openPermissions() async {
+    await openAppSettings();
+    // Re-check after returning from settings
+    await Future.delayed(const Duration(milliseconds: 500));
+    _checkPermissions();
   }
 
   Future<void> _unpair() async {
@@ -119,29 +144,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
 
           const SizedBox(height: 20),
-          _SectionTitle('Privacy'),
-          _SettingsTile(
-            icon: Icons.location_on_outlined,
-            title: 'Location Sharing',
-            trailing: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          _SectionTitle('Permissions'),
+          GestureDetector(
+            onTap: _openPermissions,
+            child: Container(
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: AppTheme.accent.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
+                color: Colors.white, borderRadius: BorderRadius.circular(16),
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8)],
               ),
-              child: Text('On', style: TextStyle(color: AppTheme.accent, fontWeight: FontWeight.w600, fontSize: 12)),
-            ),
-          ),
-          _SettingsTile(
-            icon: Icons.battery_std_outlined,
-            title: 'Battery Status',
-            trailing: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppTheme.accent.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text('On', style: TextStyle(color: AppTheme.accent, fontWeight: FontWeight.w600, fontSize: 12)),
+              child: Column(children: [
+                _PermissionRow(label: 'Location', granted: _locationGranted, icon: Icons.location_on_outlined),
+                const Divider(height: 20),
+                _PermissionRow(label: 'Background Location', granted: _bgLocationGranted, icon: Icons.my_location_outlined),
+                const Divider(height: 20),
+                _PermissionRow(label: 'Notifications', granted: _notificationGranted, icon: Icons.notifications_outlined),
+                const SizedBox(height: 10),
+                Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                  Text('Tap to manage →',
+                    style: TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                ]),
+              ]),
             ),
           ),
 
@@ -181,6 +204,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+}
+
+class _PermissionRow extends StatelessWidget {
+  final String label;
+  final bool granted;
+  final IconData icon;
+  const _PermissionRow({required this.label, required this.granted, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Icon(icon, color: AppTheme.primary, size: 20),
+      const SizedBox(width: 12),
+      Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14))),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: granted
+            ? AppTheme.accent.withValues(alpha: 0.12)
+            : Colors.red.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          granted ? 'Granted' : 'Denied',
+          style: TextStyle(
+            color: granted ? AppTheme.accent : Colors.red,
+            fontWeight: FontWeight.w600,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    ]);
   }
 }
 
