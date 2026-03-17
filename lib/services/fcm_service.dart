@@ -8,18 +8,24 @@ class FcmService {
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  String? _childId;
+
   Future<void> init(BuildContext context) async {
     // Request permission
     await _fcm.requestPermission(alert: true, badge: true, sound: true);
 
+    // Cache the childId so we don't need context later
+    final pairing = context.read<PairingService>();
+    _childId = pairing.childId;
+
     // Get token and save to Firestore
     final token = await _fcm.getToken();
     if (token != null) {
-      _saveToken(context, token);
+      _saveToken(token);
     }
 
-    // Token refresh
-    _fcm.onTokenRefresh.listen((newToken) => _saveToken(context, newToken));
+    // Token refresh — use cached childId, not context
+    _fcm.onTokenRefresh.listen((newToken) => _saveToken(newToken));
 
     // Foreground messages
     FirebaseMessaging.onMessage.listen((msg) {
@@ -31,12 +37,15 @@ class FcmService {
     });
   }
 
-  Future<void> _saveToken(BuildContext context, String token) async {
-    final pairing = context.read<PairingService>();
-    if (pairing.childId == null) return;
+  Future<void> _saveToken(String token) async {
+    if (_childId == null) return;
 
-    await _db.collection('children').doc(pairing.childId).update({
-      'fcmToken': token,
-    });
+    try {
+      await _db.collection('children').doc(_childId).update({
+        'fcmToken': token,
+      });
+    } catch (e) {
+      debugPrint('FCM: failed to save token: $e');
+    }
   }
 }

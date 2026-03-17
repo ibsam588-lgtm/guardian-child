@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../services/pairing_service.dart';
-import '../services/monitor_service.dart';
 import '../theme/app_theme.dart';
 
 class PairingScreen extends StatefulWidget {
@@ -200,14 +199,7 @@ class _DigitBox extends StatelessWidget {
           BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
         ],
       ),
-      child: KeyboardListener(
-        focusNode: FocusNode(),
-        onKeyEvent: (e) {
-          if (e is KeyDownEvent && e.logicalKey == LogicalKeyboardKey.backspace) {
-            onBackspace();
-          }
-        },
-        child: TextField(
+      child: TextField(
           controller: controller,
           focusNode: focusNode,
           textAlign: TextAlign.center,
@@ -221,7 +213,6 @@ class _DigitBox extends StatelessWidget {
           ),
           onChanged: onChanged,
         ),
-      ),
     );
   }
 }

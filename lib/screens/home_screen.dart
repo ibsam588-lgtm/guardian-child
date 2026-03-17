@@ -34,7 +34,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final pairing = context.read<PairingService>();
     final monitor = context.watch<MonitorService>();
     final childName = pairing.childName ?? 'Hey!';
-    final childId = pairing.childId!;
+    final childId = pairing.childId;
+
+    if (childId == null) {
+      // Shouldn't happen, but guard against it
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.go('/pair');
+      });
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
 
     return Scaffold(
       body: SafeArea(
@@ -396,18 +404,38 @@ class _RecentRequests extends StatelessWidget {
       stream: FirebaseFirestore.instance
           .collection('timeRequests')
           .where('childId', isEqualTo: childId)
-          .orderBy('createdAt', descending: true)
-          .limit(5)
+          .limit(10)
           .snapshots(),
       builder: (ctx, snap) {
+        if (snap.hasError) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white, borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Text('Could not load requests', style: TextStyle(color: Colors.grey)),
+            ),
+          );
+        }
         if (!snap.hasData) {
           return const Padding(
             padding: EdgeInsets.symmetric(horizontal: 24),
             child: LinearProgressIndicator(),
           );
         }
-        final docs = snap.data!.docs;
-        if (docs.isEmpty) {
+        // Sort client-side to avoid composite index requirement
+        final docs = snap.data!.docs.toList()
+          ..sort((a, b) {
+            final tsA = ((a.data() as Map<String, dynamic>)['createdAt'] as Timestamp?)
+                ?.millisecondsSinceEpoch ?? 0;
+            final tsB = ((b.data() as Map<String, dynamic>)['createdAt'] as Timestamp?)
+                ?.millisecondsSinceEpoch ?? 0;
+            return tsB.compareTo(tsA);
+          });
+        final topDocs = docs.take(5).toList();
+        if (topDocs.isEmpty) {
           return Padding(
             padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
             child: Container(
@@ -423,9 +451,9 @@ class _RecentRequests extends StatelessWidget {
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(horizontal: 24),
-          itemCount: docs.length,
+          itemCount: topDocs.length,
           itemBuilder: (_, i) {
-            final d = docs[i].data() as Map<String, dynamic>;
+            final d = topDocs[i].data() as Map<String, dynamic>;
             final status = d['status'] ?? 'pending';
             return _RequestTile(appName: d['appName'] ?? '', status: status, minutes: d['requestedMinutes'] ?? 15);
           },

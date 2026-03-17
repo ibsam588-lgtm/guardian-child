@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
+import '../services/pairing_service.dart';
+import '../services/monitor_service.dart';
 import '../theme/app_theme.dart';
 
 class PermissionsScreen extends StatefulWidget {
@@ -22,6 +25,13 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
       await Permission.locationAlways.request();
     }
     if (!mounted) return;
+
+    // Start monitoring now that permissions are granted
+    final pairing = context.read<PairingService>();
+    if (pairing.childId != null) {
+      context.read<MonitorService>().start(pairing.childId!);
+    }
+
     context.go('/home');
   }
 
@@ -89,7 +99,14 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
               SizedBox(
                 width: double.infinity,
                 child: TextButton(
-                  onPressed: () => context.go('/home'),
+                  onPressed: () {
+                    // Start monitoring even without permissions (location will be skipped)
+                    final pairing = context.read<PairingService>();
+                    if (pairing.childId != null) {
+                      context.read<MonitorService>().start(pairing.childId!);
+                    }
+                    context.go('/home');
+                  },
                   child: Text('Skip for now',
                     style: TextStyle(color: Colors.grey[500], fontWeight: FontWeight.w600)),
                 ),
