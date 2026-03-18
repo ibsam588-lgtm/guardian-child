@@ -53,6 +53,7 @@ class MonitorService extends ChangeNotifier {
   void start(String childId) {
     if (_isRunning) return;
     _isRunning = true;
+    // Start foreground service — it will self-stop if permissions not granted
     _startForegroundService();
     _heartbeatTimer = Timer.periodic(
       const Duration(seconds: 30),
