@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/pairing_service.dart';
 import '../services/monitor_service.dart';
 import '../theme/app_theme.dart';
@@ -20,17 +21,18 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
+    _ctrl = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 1200));
     _scale = Tween<double>(begin: 0.6, end: 1.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut));
+        CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut));
     _opacity = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: const Interval(0.0, 0.5)));
+        CurvedAnimation(parent: _ctrl, curve: const Interval(0.0, 0.5)));
     _ctrl.forward();
     _navigate();
   }
 
   Future<void> _navigate() async {
-    // Ensure anonymous auth — child devices don't need an account
+    // Ensure anonymous auth
     try {
       if (FirebaseAuth.instance.currentUser == null) {
         await FirebaseAuth.instance.signInAnonymously();
@@ -44,8 +46,12 @@ class _SplashScreenState extends State<SplashScreen>
 
     final pairing = context.read<PairingService>();
     if (pairing.isPaired) {
-      // Resume monitoring for already-paired device
-      context.read<MonitorService>().start(pairing.childId!);
+      // Only start monitor if location permission is already granted.
+      // If not granted, the foreground service would crash on Android 14+.
+      final locStatus = await Permission.locationWhenInUse.status;
+      if (locStatus.isGranted && pairing.childId != null) {
+        context.read<MonitorService>().start(pairing.childId!);
+      }
       context.go('/home');
     } else {
       context.go('/pair');
@@ -73,7 +79,8 @@ class _SplashScreenState extends State<SplashScreen>
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(28)),
-                child: const Icon(Icons.shield_rounded, size: 60, color: Colors.white),
+                child: const Icon(Icons.shield_rounded,
+                    size: 60, color: Colors.white),
               ),
               const SizedBox(height: 20),
               const Text('GuardIan', style: TextStyle(
@@ -81,7 +88,8 @@ class _SplashScreenState extends State<SplashScreen>
                 fontWeight: FontWeight.w800, letterSpacing: 1.5)),
               const SizedBox(height: 6),
               Text('Stay safe. Stay connected.',
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 15)),
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.8), fontSize: 15)),
             ]),
           ),
         ),
