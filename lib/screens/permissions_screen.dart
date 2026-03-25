@@ -21,7 +21,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
     await Permission.locationWhenInUse.request();
     await Permission.notification.request();
     // Background location only after foreground is granted
-    final loc = await Permission.location.status;
+    final loc = await Permission.locationWhenInUse.status;
     if (loc.isGranted) {
       await Permission.locationAlways.request();
     }

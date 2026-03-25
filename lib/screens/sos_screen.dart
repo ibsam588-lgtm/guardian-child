@@ -55,7 +55,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       if (permission == LocationPermission.always || permission == LocationPermission.whileInUse) {
         final pos = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-        );
+        ).timeout(const Duration(seconds: 10));
         lat = pos.latitude;
         lng = pos.longitude;
       }

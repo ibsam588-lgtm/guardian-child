@@ -108,6 +108,10 @@ class PairingService extends ChangeNotifier {
         await _db.collection('children').doc(childId).set({
           'deviceId': deviceId,
           'deviceName': deviceName,
+          // childAuthUid is the anonymous Firebase Auth UID for this device.
+          // Stored here so Firestore rules can verify child device ownership:
+          //   request.auth.uid == resource.data.childAuthUid
+          'childAuthUid': user.uid,
           'isOnline': true,
           'lastSeen': FieldValue.serverTimestamp(),
           'batteryLevel': batteryLevel,
