@@ -12,7 +12,7 @@ const _kChildNameKey = 'paired_child_name';
 
 class PairingService extends ChangeNotifier {
   final SharedPreferences _prefs;
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
 
   PairingService(this._prefs);
 

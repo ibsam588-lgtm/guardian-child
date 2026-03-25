@@ -34,7 +34,7 @@ class AppLimitInfo {
 class MonitorService extends ChangeNotifier {
   static const _channel = MethodChannel('com.guardian.child/monitor');
 
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
   final Battery _battery = Battery();
 
   Timer? _heartbeatTimer;
