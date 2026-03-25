@@ -104,10 +104,12 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
         ),
         title: const Text('SOS'),
       ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: _sent ? _sentView() : _sosView(),
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: _sent ? _sentView() : _sosView(),
+          ),
         ),
       ),
     );

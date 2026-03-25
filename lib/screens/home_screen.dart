@@ -44,7 +44,27 @@ class _HomeScreenState extends State<HomeScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final shouldExit = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Exit GuardIan?'),
+            content: const Text('Do you want to close the app?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(ctx, true),  child: const Text('Exit')),
+            ],
+          ),
+        );
+        if (shouldExit == true && context.mounted) {
+          // Pop all routes and let Android handle the exit
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+      },
+      child: Scaffold(
       body: SafeArea(
         child: CustomScrollView(
           slivers: [
@@ -177,7 +197,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // ── Bottom nav ────────────────────────────────────────────────────
       bottomNavigationBar: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: EdgeInsets.only(
+          top: 12,
+          bottom: 12 + MediaQuery.of(context).padding.bottom,
+        ),
         decoration: BoxDecoration(
           color: Colors.white,
           boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 16)],
@@ -190,6 +213,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _NavBtn(icon: Icons.settings_rounded, label: 'Settings', onTap: () => context.go('/settings')),
           ],
         ),
+      ),
       ),
     );
   }

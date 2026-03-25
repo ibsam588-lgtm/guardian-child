@@ -14,6 +14,15 @@ class PermissionsScreen extends StatefulWidget {
 class _PermissionsScreenState extends State<PermissionsScreen> {
   bool _requesting = false;
 
+  @override
+  void initState() {
+    super.initState();
+    // Auto-trigger the OS permission dialogs as soon as the screen appears.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _requestAll();
+    });
+  }
+
   Future<void> _requestAll() async {
     setState(() => _requesting = true);
 

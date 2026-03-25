@@ -46,13 +46,17 @@ class _SplashScreenState extends State<SplashScreen>
 
     final pairing = context.read<PairingService>();
     if (pairing.isPaired) {
-      // Only start monitor if location permission is already granted.
-      // If not granted, the foreground service would crash on Android 14+.
       final locStatus = await Permission.locationWhenInUse.status;
-      if (locStatus.isGranted && pairing.childId != null) {
-        context.read<MonitorService>().start(pairing.childId!);
+      if (locStatus.isGranted) {
+        // Permissions already granted — start monitor and go straight to home.
+        if (pairing.childId != null) {
+          context.read<MonitorService>().start(pairing.childId!);
+        }
+        context.go('/home');
+      } else {
+        // First launch after pairing: show permissions screen so OS dialogs fire.
+        context.go('/permissions');
       }
-      context.go('/home');
     } else {
       context.go('/pair');
     }

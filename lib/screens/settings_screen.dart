@@ -88,8 +88,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         title: const Text('Settings'),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
         children: [
           // Profile card
           Container(
@@ -202,6 +203,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ],
+        ),
       ),
     );
   }
