@@ -24,6 +24,12 @@
     <!-- Battery info -->
     <uses-permission android:name="android.permission.BATTERY_STATS" />
 
+    <!-- App usage stats — required for UsageStatsManager (child app monitoring) -->
+    <!-- This is a special permission: user must grant it via Settings > Apps > Usage access -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions"
+        xmlns:tools="http://schemas.android.com/tools"/>
+
     <application
         android:label="GuardIan Child"
         android:name="${applicationName}"

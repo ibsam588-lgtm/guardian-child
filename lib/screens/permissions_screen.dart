@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/pairing_service.dart';
 import '../services/monitor_service.dart';
 import '../theme/app_theme.dart';
+
+const _monitorChannel = MethodChannel('com.guardian.child/monitor');
 
 class PermissionsScreen extends StatefulWidget {
   const PermissionsScreen({super.key});
@@ -13,6 +16,7 @@ class PermissionsScreen extends StatefulWidget {
 
 class _PermissionsScreenState extends State<PermissionsScreen> {
   bool _requesting = false;
+  bool _hasUsageAccess = false;
 
   @override
   void initState() {
@@ -21,6 +25,20 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _requestAll();
     });
+  }
+
+  Future<bool> _checkUsageAccess() async {
+    try {
+      return await _monitorChannel.invokeMethod<bool>('hasUsageStatsPermission') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _openUsageAccess() async {
+    try {
+      await _monitorChannel.invokeMethod<void>('openUsageAccessSettings');
+    } catch (_) {}
   }
 
   Future<void> _requestAll() async {
@@ -34,6 +52,9 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
     if (loc.isGranted) {
       await Permission.locationAlways.request();
     }
+    // Check usage stats (special permission — can't be requested via dialog)
+    final hasUsage = await _checkUsageAccess();
+    if (mounted) setState(() => _hasUsageAccess = hasUsage);
 
     if (!mounted) return;
 
@@ -88,6 +109,9 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
                   color: const Color(0xFF10B981),
                   title: 'Background Location',
                   subtitle: 'Needed even when the app is closed'),
+              _UsageAccessRow(
+                  granted: _hasUsageAccess,
+                  onTap: _openUsageAccess),
               const Spacer(),
               SizedBox(
                 width: double.infinity, height: 54,
@@ -128,6 +152,49 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _UsageAccessRow extends StatelessWidget {
+  final bool granted;
+  final VoidCallback onTap;
+  const _UsageAccessRow({required this.granted, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Row(children: [
+        Container(
+          width: 50, height: 50,
+          decoration: BoxDecoration(
+              color: const Color(0xFF8B5CF6).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(14)),
+          child: const Icon(Icons.bar_chart_rounded,
+              color: Color(0xFF8B5CF6), size: 26),
+        ),
+        const SizedBox(width: 16),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+          const Text('App Usage Access', style: TextStyle(
+              fontWeight: FontWeight.w700, fontSize: 15,
+              color: Color(0xFF2D2D2D))),
+          Text('Required to monitor screen time',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+        ])),
+        if (granted)
+          const Icon(Icons.check_circle_rounded,
+              color: Color(0xFF10B981), size: 22)
+        else
+          TextButton(
+            onPressed: onTap,
+            style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6)),
+            child: const Text('Grant',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                    color: Color(0xFF8B5CF6))),
+          ),
+      ]),
     );
   }
 }

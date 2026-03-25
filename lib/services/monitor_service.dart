@@ -57,7 +57,10 @@ class MonitorService extends ChangeNotifier {
     _startForegroundService();
     _heartbeatTimer = Timer.periodic(
       const Duration(seconds: 30),
-      (_) => unawaited(_sendHeartbeat(childId)),
+      (_) {
+        unawaited(_sendHeartbeat(childId));
+        unawaited(_reportAppUsage(childId));
+      },
     );
     _listenToAppLimits(childId);
     unawaited(_sendHeartbeat(childId));
@@ -139,6 +142,56 @@ class MonitorService extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('Heartbeat error: $e');
+    }
+  }
+
+  /// Reads today's app usage via UsageStatsManager (requires PACKAGE_USAGE_STATS
+  /// permission granted in Settings > Apps > Usage access) and writes it to
+  /// children/{childId}/app_usage/{packageName} in Firestore.
+  Future<void> _reportAppUsage(String childId) async {
+    try {
+      final raw = await _channel.invokeMethod<Map<Object?, Object?>>('getAppUsage');
+      if (raw == null || raw.isEmpty) return;
+
+      final now = DateTime.now();
+      final dateStr =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+      // Build appName lookup from current limits list
+      final limitsByPkg = { for (final l in _appLimits) l.packageName: l };
+
+      final batch = _db.batch();
+      var count = 0;
+      for (final entry in raw.entries) {
+        final pkg = entry.key as String? ?? '';
+        final mins = (entry.value as num?)?.toInt() ?? 0;
+        if (pkg.isEmpty || mins <= 0) continue;
+        if (count++ >= 25) break; // cap batch size
+
+        final limit = limitsByPkg[pkg];
+        final docRef = _db
+            .collection('children')
+            .doc(childId)
+            .collection('app_usage')
+            .doc(pkg);
+        batch.set(docRef, {
+          'packageName': pkg,
+          'appName': limit?.appName ?? pkg,
+          'minutesUsed': mins,
+          'dailyLimitMinutes': limit?.dailyLimitMinutes ?? 0,
+          'date': dateStr,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+      if (count > 0) await batch.commit();
+    } on MissingPluginException {
+      // Running in test / simulator
+    } on PlatformException catch (e) {
+      if (e.code != 'PERMISSION_DENIED') {
+        debugPrint('App usage error: ${e.message}');
+      }
+    } catch (e) {
+      debugPrint('App usage error: $e');
     }
   }
 
