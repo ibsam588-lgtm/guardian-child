@@ -3,6 +3,10 @@ package com.guardian.child
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -15,6 +19,7 @@ import java.util.Calendar
 class MainActivity : FlutterActivity() {
 
     private val CHANNEL = "com.guardian.child/monitor"
+    private var sirenPlayer: MediaPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,7 +59,15 @@ class MainActivity : FlutterActivity() {
                             result.error("USAGE_STATS_ERROR", e.message, null)
                         }
                     }
-                    else -> result.notImplemented()
+                    "playSiren" -> {
+                    playSiren()
+                    result.success(null)
+                }
+                "stopSiren" -> {
+                    stopSiren()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
                 }
             }
     }
@@ -76,6 +89,38 @@ class MainActivity : FlutterActivity() {
             )
         }
         return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    private fun playSiren() {
+        stopSiren()
+        try {
+            val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            sirenPlayer = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                setDataSource(this@MainActivity, alarmUri)
+                isLooping = true
+                prepare()
+                start()
+            }
+            // Auto-stop after 30 seconds
+            android.os.Handler(mainLooper).postDelayed({ stopSiren() }, 30_000)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun stopSiren() {
+        sirenPlayer?.let {
+            if (it.isPlaying) it.stop()
+            it.release()
+        }
+        sirenPlayer = null
     }
 
     /** Returns a map of packageName → minutesUsed today (since midnight). */
