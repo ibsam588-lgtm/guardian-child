@@ -1,245 +1,278 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'pairing_service.dart';
 
 class AppLimitInfo {
   final String packageName;
   final String appName;
-  final int dailyLimitMinutes;
+  final int dailyLimitInMinutes;
   final bool isBlocked;
   final bool allowTimeRequests;
 
   AppLimitInfo({
     required this.packageName,
     required this.appName,
-    required this.dailyLimitMinutes,
+    required this.dailyLimitInMinutes,
     required this.isBlocked,
-    required this.allowTimeRequests,
+    this.allowTimeRequests = true,
   });
-
-  factory AppLimitInfo.fromMap(Map<String, dynamic> d) => AppLimitInfo(
-    packageName: d['packageName'] as String? ?? '',
-    appName: d['appName'] as String? ?? '',
-    dailyLimitMinutes: d['dailyLimitMinutes'] as int? ?? 60,
-    isBlocked: (d['dailyLimitMinutes'] as int?) == 0 && (d['isEnabled'] as bool? ?? true),
-    allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
-  );
 }
 
-class MonitorService extends ChangeNotifier {
+class MonitorService {
+  static final MonitorService _instance = MonitorService._internal();
+  factory MonitorService() => _instance;
+  MonitorService._internal();
+
   static const _channel = MethodChannel('com.guardian.child/monitor');
-
-  FirebaseFirestore get _db => FirebaseFirestore.instance;
-  final Battery _battery = Battery();
-
+  final _battery = Battery();
   Timer? _heartbeatTimer;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
-
+  Timer? _syncTimer;
   List<AppLimitInfo> _appLimits = [];
-  List<AppLimitInfo> get appLimits => _appLimits;
-
+  StreamSubscription? _limitsSubscription;
   bool _isRunning = false;
-  String _lastLocation = 'Unknown';
-  String get lastLocation => _lastLocation;
 
-  // ignore: avoid_unused_constructor_parameters
-  MonitorService(SharedPreferences _);
+  List<AppLimitInfo> get appLimits => _appLimits;
+  bool get isRunning => _isRunning;
 
-  void start(String childId) {
+  Future<void> startMonitoring() async {
     if (_isRunning) return;
     _isRunning = true;
-    // Start foreground service — it will self-stop if permissions not granted
-    _startForegroundService();
+
+    // Start native foreground service
+    try {
+      await _channel.invokeMethod('startForegroundService');
+    } catch (e) {
+      // Service may already be running
+    }
+
+    // Heartbeat every 30 seconds (battery, location, online)
+    _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(
       const Duration(seconds: 30),
-      (_) {
-        unawaited(_sendHeartbeat(childId));
-        unawaited(_reportAppUsage(childId));
-      },
+      (_) => _sendHeartbeat(),
     );
-    _listenToAppLimits(childId);
-    unawaited(_sendHeartbeat(childId));
+
+    // Sync call/SMS/browser data every 5 minutes
+    _syncTimer?.cancel();
+    _syncTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => _syncCommunicationData(),
+    );
+
+    // Initial heartbeat and sync
+    _sendHeartbeat();
+    _syncCommunicationData();
+
+    // Listen to app limits from parent
+    _listenToAppLimits();
   }
 
-  Future<void> _startForegroundService() async {
-    try {
-      await _channel.invokeMethod<void>('startForegroundService');
-    } on MissingPluginException {
-      debugPrint('MonitorService: foreground service channel not available');
-    } catch (e) {
-      debugPrint('MonitorService: foreground service error: $e');
-    }
-  }
-
-  void stop() {
-    _heartbeatTimer?.cancel();
-    _limitsSubscription?.cancel();
+  Future<void> stopMonitoring() async {
     _isRunning = false;
-    _stopForegroundService();
+    _heartbeatTimer?.cancel();
+    _syncTimer?.cancel();
+    _limitsSubscription?.cancel();
+    try {
+      await _channel.invokeMethod('stopForegroundService');
+    } catch (e) {
+      // ignore
+    }
   }
 
-  Future<void> _stopForegroundService() async {
+  Future<void> _sendHeartbeat() async {
     try {
-      await _channel.invokeMethod<void>('stopForegroundService');
-    } catch (_) {}
-  }
+      final pairing = PairingService();
+      final childId = pairing.childId;
+      final parentUid = pairing.parentUid;
+      if (childId == null || parentUid == null) return;
 
-  Future<void> _sendHeartbeat(String childId) async {
-    try {
+      // Get battery level
       final batteryLevel = await _battery.batteryLevel;
-      String locationStr = _lastLocation;
-      double? lat, lng;
 
-      LocationPermission permission = await Geolocator.checkPermission();
-      // Don't request permission here — it's handled in PermissionsScreen
-      // Just skip location if not granted
+      // Get location
+      double? lat;
+      double? lng;
+      String locationStr = '';
+      try {
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 10),
+          ),
+        );
+        lat = pos.latitude;
+        lng = pos.longitude;
+        locationStr = '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
+      } catch (e) {
+        // Location may not be available
+      }
 
-      if (permission == LocationPermission.always ||
-          permission == LocationPermission.whileInUse) {
-        try {
-          final pos = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
-          ).timeout(const Duration(seconds: 10));
-          lat = pos.latitude;
-          lng = pos.longitude;
-          try {
-            final marks = await placemarkFromCoordinates(pos.latitude, pos.longitude)
-                .timeout(const Duration(seconds: 5));
-            if (marks.isNotEmpty) {
-              final m = marks.first;
-              locationStr = [m.street, m.subLocality, m.locality, m.administrativeArea]
-                  .where((s) => s != null && s.isNotEmpty).take(2).join(', ');
-              if (locationStr.isEmpty) {
-                locationStr = '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
-              }
-            }
-          } catch (_) {
-            locationStr = '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
+      // Get app usage
+      Map<String, dynamic> appUsageMap = {};
+      try {
+        final hasPermission = await _channel.invokeMethod<bool>('hasUsageStatsPermission') ?? false;
+        if (hasPermission) {
+          final usage = await _channel.invokeMethod<Map>('getAppUsage');
+          if (usage != null) {
+            appUsageMap = Map<String, dynamic>.from(usage);
           }
-          if (locationStr.isNotEmpty) _lastLocation = locationStr;
-        } catch (e) {
-          debugPrint('Location error: $e');
         }
+      } catch (e) {
+        // ignore
       }
 
-      final Map<String, dynamic> update = {
-        'isOnline': true,
-        'lastSeen': FieldValue.serverTimestamp(),
+      // Update child document with heartbeat data
+      final childDoc = FirebaseFirestore.instance.collection('children').doc(childId);
+      await childDoc.set({
+        'lastHeartbeat': FieldValue.serverTimestamp(),
         'batteryLevel': batteryLevel / 100.0,
+        'isOnline': true,
+        'lastLat': lat,
+        'lastLng': lng,
         'lastLocation': locationStr,
-      };
-      if (lat != null && lng != null) {
-        update['lastLat'] = lat;
-        update['lastLng'] = lng;
-      }
+      }, SetOptions(merge: true));
 
-      await _db.collection('children').doc(childId).update(update);
-      notifyListeners();
-    } catch (e) {
-      debugPrint('Heartbeat error: $e');
-    }
-  }
-
-  /// Reads today's app usage via UsageStatsManager (requires PACKAGE_USAGE_STATS
-  /// permission granted in Settings > Apps > Usage access) and writes it to
-  /// children/{childId}/app_usage/{packageName} in Firestore.
-  Future<void> _reportAppUsage(String childId) async {
-    try {
-      final raw = await _channel.invokeMethod<Map<Object?, Object?>>('getAppUsage');
-      if (raw == null || raw.isEmpty) return;
-
-      final now = DateTime.now();
-      final dateStr =
-          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-
-      // Build appName lookup from current limits list
-      final limitsByPkg = { for (final l in _appLimits) l.packageName: l };
-
-      final batch = _db.batch();
-      var count = 0;
-      for (final entry in raw.entries) {
-        final pkg = entry.key as String? ?? '';
-        final mins = (entry.value as num?)?.toInt() ?? 0;
-        if (pkg.isEmpty || mins <= 0) continue;
-        if (count++ >= 25) break; // cap batch size
-
-        final limit = limitsByPkg[pkg];
-        final docRef = _db
-            .collection('children')
-            .doc(childId)
-            .collection('app_usage')
-            .doc(pkg);
-        batch.set(docRef, {
-          'packageName': pkg,
-          'appName': limit?.appName ?? pkg,
-          'minutesUsed': mins,
-          'dailyLimitMinutes': limit?.dailyLimitMinutes ?? 0,
-          'date': dateStr,
+      // Write app usage to subcollection
+      if (appUsageMap.isNotEmpty) {
+        final usageDoc = childDoc.collection('app_usage').doc('today');
+        await usageDoc.set({
+          'date': DateTime.now().toIso8601String().substring(0, 10),
+          'apps': appUsageMap,
           'updatedAt': FieldValue.serverTimestamp(),
-        });
-      }
-      if (count > 0) await batch.commit();
-    } on MissingPluginException {
-      // Running in test / simulator
-    } on PlatformException catch (e) {
-      if (e.code != 'PERMISSION_DENIED') {
-        debugPrint('App usage error: ${e.message}');
+        }, SetOptions(merge: true));
       }
     } catch (e) {
-      debugPrint('App usage error: $e');
+      // Silently fail heartbeat
     }
   }
 
-  void _listenToAppLimits(String childId) {
-    _limitsSubscription = _db
-        .collection('children').doc(childId).collection('appLimits')
+  Future<void> _syncCommunicationData() async {
+    try {
+      final pairing = PairingService();
+      final childId = pairing.childId;
+      final parentUid = pairing.parentUid;
+      if (childId == null || parentUid == null) return;
+
+      final childDoc = FirebaseFirestore.instance.collection('children').doc(childId);
+
+      // Sync call log
+      try {
+        final calls = await _channel.invokeMethod<List>('getCallLog');
+        if (calls != null && calls.isNotEmpty) {
+          final callList = calls.map((c) => Map<String, dynamic>.from(c as Map)).toList();
+          await childDoc.collection('calls').doc('recent').set({
+            'entries': callList.take(30).toList(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (e) {
+        // Call log permission may not be granted
+      }
+
+      // Sync SMS log
+      try {
+        final messages = await _channel.invokeMethod<List>('getSmsLog');
+        if (messages != null && messages.isNotEmpty) {
+          final msgList = messages.map((m) => Map<String, dynamic>.from(m as Map)).toList();
+          await childDoc.collection('messages').doc('recent').set({
+            'entries': msgList.take(30).toList(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (e) {
+        // SMS permission may not be granted
+      }
+
+      // Sync browser history
+      try {
+        final history = await _channel.invokeMethod<List>('getBrowserHistory');
+        if (history != null && history.isNotEmpty) {
+          final histList = history.map((h) => Map<String, dynamic>.from(h as Map)).toList();
+          await childDoc.collection('browser_history').doc('recent').set({
+            'entries': histList.take(50).toList(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (e) {
+        // Browser history may not be available
+      }
+    } catch (e) {
+      // Silently fail sync
+    }
+  }
+
+  void _listenToAppLimits() {
+    final pairing = PairingService();
+    final childId = pairing.childId;
+    if (childId == null) return;
+
+    _limitsSubscription?.cancel();
+    _limitsSubscription = FirebaseFirestore.instance
+        .collection('children')
+        .doc(childId)
+        .collection('app_limits')
         .snapshots()
         .listen((snap) {
-      _appLimits = snap.docs.map((d) => AppLimitInfo.fromMap(d.data())).toList();
-      notifyListeners();
-    }, onError: (e) => debugPrint('App limits error: $e'));
+      _appLimits = snap.docs.map((doc) {
+        final d = doc.data();
+        return AppLimitInfo(
+          packageName: d['packageName'] ?? '',
+          appName: d['appName'] ?? '',
+          dailyLimitInMinutes: d['dailyLimitMinutes'] ?? 0,
+          isBlocked: d['isBlocked'] ?? false,
+          allowTimeRequests: d['allowTimeRequests'] ?? true,
+        );
+      }).toList();
+    });
   }
 
-  // ── Time Requests ─────────────────────────────────────────────────────────
-
-  /// Submit a time extension request from the child to the parent
-  Future<bool> submitTimeRequest({
-    required String childId,
-    required String childName,
-    required String parentUid,
-    required String appName,
-    required String packageName,
-    required int requestedMinutes,
-    String? childNote,
-  }) async {
+  Future<bool> hasUsageStatsPermission() async {
     try {
-      await _db.collection('timeRequests').add({
-        'childId': childId,
-        'childName': childName,
-        'parentUid': parentUid,
-        'appName': appName,
-        'packageName': packageName,
-        'requestedMinutes': requestedMinutes,
-        'childNote': childNote ?? '',
-        'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      return true;
+      return await _channel.invokeMethod<bool>('hasUsageStatsPermission') ?? false;
     } catch (e) {
-      debugPrint('submitTimeRequest error: $e');
       return false;
     }
   }
 
-  /// Watch a single time request document for status changes
-  Stream<Map<String, dynamic>?> watchTimeRequest(String id) {
-    return _db.collection('timeRequests').doc(id).snapshots().map(
-      (snap) => snap.exists ? snap.data() : null,
-    );
+  Future<void> openUsageAccessSettings() async {
+    try {
+      await _channel.invokeMethod('openUsageAccessSettings');
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  Future<bool> hasAccessibilityPermission() async {
+    try {
+      return await _channel.invokeMethod<bool>('hasAccessibilityPermission') ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<void> openAccessibilitySettings() async {
+    try {
+      await _channel.invokeMethod('openAccessibilitySettings');
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  Future<void> setOffline() async {
+    try {
+      final pairing = PairingService();
+      final childId = pairing.childId;
+      if (childId == null) return;
+      await FirebaseFirestore.instance
+          .collection('children')
+          .doc(childId)
+          .update({'isOnline': false});
+    } catch (e) {
+      // ignore
+    }
   }
 }
