@@ -1,4 +1,4 @@
-import 'dart:async';
+himport 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -38,7 +38,7 @@ class MonitorService extends ChangeNotifier {
   StreamSubscription? _limitsSubscription;
   bool _isRunning = false;
   String? _childId;
-  String _lastLocation = '';
+  String _lastLocation = 'Unknown';
 
   List<AppLimitInfo> get appLimits => _appLimits;
   bool get isRunning => _isRunning;
