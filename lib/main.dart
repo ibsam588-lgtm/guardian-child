@@ -14,6 +14,7 @@ import 'services/auth_service.dart';
 import 'services/pairing_service.dart';
 import 'services/monitor_service.dart';
 import 'services/fcm_service.dart';
+import 'services/command_service.dart';
 import 'screens/splash_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/home_screen.dart';
@@ -71,6 +72,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
 
   // Cache the router so it's NEVER rebuilt — rebuilding resets navigation
   GoRouter? _router;
+  final _commandService = CommandService();
 
   @override
   void initState() {
@@ -84,6 +86,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _commandService.stop();
     _router?.dispose();
     super.dispose();
   }
@@ -96,7 +99,10 @@ class _GuardianChildAppState extends State<GuardianChildApp>
 
     switch (state) {
       case AppLifecycleState.resumed:
-        if (childId != null) monitor.start(childId);
+        if (childId != null) {
+          monitor.start(childId);
+          _commandService.start(childId);
+        }
         break;
       case AppLifecycleState.detached:
         if (childId != null) {
