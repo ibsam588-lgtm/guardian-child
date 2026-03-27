@@ -287,6 +287,31 @@ class MonitorService extends ChangeNotifier {
     }, onError: (e) => debugPrint('App limits error: $e'));
   }
 
+  // ── Accessibility ───────────────────────────────────────────────────────────
+
+  /// Returns true if the app has accessibility service permission.
+  Future<bool> hasAccessibilityPermission() async {
+    try {
+      return await _channel.invokeMethod<bool>('hasAccessibilityPermission') ?? false;
+    } on MissingPluginException {
+      return false;
+    } catch (e) {
+      debugPrint('hasAccessibilityPermission error: $e');
+      return false;
+    }
+  }
+
+  /// Opens the system accessibility settings so the user can enable this app.
+  Future<void> openAccessibilitySettings() async {
+    try {
+      await _channel.invokeMethod<void>('openAccessibilitySettings');
+    } on MissingPluginException {
+      debugPrint('openAccessibilitySettings: channel not available');
+    } catch (e) {
+      debugPrint('openAccessibilitySettings error: $e');
+    }
+  }
+
   // ── Time Requests ─────────────────────────────────────────────────────────
 
   /// Submit a time extension request from the child to the parent
