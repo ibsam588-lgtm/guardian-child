@@ -6,16 +6,21 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.database.Cursor
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.CallLog
+import android.provider.ContactsContract
 import android.provider.Settings
+import android.provider.Telephony
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.util.Calendar
 
 class MainActivity : FlutterActivity() {
-
     private val CHANNEL = "com.guardian.child/monitor"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,21 +35,26 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+
                     "startForegroundService" -> {
                         MonitorService.start(this)
                         result.success(null)
                     }
+
                     "stopForegroundService" -> {
                         MonitorService.stop(this)
                         result.success(null)
                     }
+
                     "hasUsageStatsPermission" -> {
                         result.success(hasUsageStatsPermission())
                     }
+
                     "openUsageAccessSettings" -> {
                         startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                         result.success(null)
                     }
+
                     "getAppUsage" -> {
                         if (!hasUsageStatsPermission()) {
                             result.error("PERMISSION_DENIED", "Usage stats permission not granted", null)
@@ -56,6 +66,7 @@ class MainActivity : FlutterActivity() {
                             result.error("USAGE_STATS_ERROR", e.message, null)
                         }
                     }
+
                     "getInstalledApps" -> {
                         try {
                             result.success(getInstalledApps())
@@ -63,9 +74,58 @@ class MainActivity : FlutterActivity() {
                             result.error("INSTALLED_APPS_ERROR", e.message, null)
                         }
                     }
+
+                    "hasAccessibilityPermission" -> {
+                        // Placeholder — accessibility service is currently disabled
+                        result.success(false)
+                    }
+
+                    "openAccessibilitySettings" -> {
+                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        result.success(null)
+                    }
+
+                    "getCallLog" -> {
+                        if (!hasPermission(android.Manifest.permission.READ_CALL_LOG)) {
+                            result.error("PERMISSION_DENIED", "Call log permission not granted", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            result.success(getRecentCallLog())
+                        } catch (e: Exception) {
+                            result.error("CALL_LOG_ERROR", e.message, null)
+                        }
+                    }
+
+                    "getSmsLog" -> {
+                        if (!hasPermission(android.Manifest.permission.READ_SMS)) {
+                            result.error("PERMISSION_DENIED", "SMS permission not granted", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            result.success(getRecentSmsLog())
+                        } catch (e: Exception) {
+                            result.error("SMS_LOG_ERROR", e.message, null)
+                        }
+                    }
+
+                    "hasCommsPermission" -> {
+                        result.success(
+                            hasPermission(android.Manifest.permission.READ_CALL_LOG) &&
+                            hasPermission(android.Manifest.permission.READ_SMS)
+                        )
+                    }
+
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    // ── Permission helpers ────────────────────────────────────────────────────
+
+    private fun hasPermission(permission: String): Boolean {
+        return ContextCompat.checkSelfPermission(this, permission) ==
+                PackageManager.PERMISSION_GRANTED
     }
 
     private fun hasUsageStatsPermission(): Boolean {
@@ -87,6 +147,8 @@ class MainActivity : FlutterActivity() {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
+    // ── Installed apps ────────────────────────────────────────────────────────
+
     /** Returns a list of installed apps with package name, app name, and system flag. */
     private fun getInstalledApps(): List<Map<String, Any>> {
         val pm = packageManager
@@ -102,7 +164,9 @@ class MainActivity : FlutterActivity() {
         }.sortedBy { it["appName"] as String }
     }
 
-    /** Returns a map of packageName → minutesUsed today (since midnight). */
+    // ── App usage ─────────────────────────────────────────────────────────────
+
+    /** Returns a map of packageName -> minutesUsed today (since midnight). */
     private fun getTodayAppUsageMinutes(): Map<String, Int> {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val cal = Calendar.getInstance().apply {
@@ -120,5 +184,136 @@ class MainActivity : FlutterActivity() {
         return stats
             .filter { it.totalTimeInForeground > 0 }
             .associate { it.packageName to (it.totalTimeInForeground / 60_000L).toInt() }
+    }
+
+    // ── Call log ──────────────────────────────────────────────────────────────
+
+    /** Returns the last 50 call log entries from the past 24 hours. */
+    private fun getRecentCallLog(): List<Map<String, Any?>> {
+        val results = mutableListOf<Map<String, Any?>>()
+        val oneDayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+
+        val cursor: Cursor? = contentResolver.query(
+            CallLog.Calls.CONTENT_URI,
+            arrayOf(
+                CallLog.Calls.NUMBER,
+                CallLog.Calls.CACHED_NAME,
+                CallLog.Calls.TYPE,
+                CallLog.Calls.DATE,
+                CallLog.Calls.DURATION
+            ),
+            "${CallLog.Calls.DATE} > ?",
+            arrayOf(oneDayAgo.toString()),
+            "${CallLog.Calls.DATE} DESC"
+        )
+
+        cursor?.use {
+            val maxEntries = 50
+            var count = 0
+            while (it.moveToNext() && count < maxEntries) {
+                val number = it.getString(0) ?: ""
+                val name = it.getString(1)
+                val type = it.getInt(2)
+                val date = it.getLong(3)
+                val duration = it.getInt(4)
+
+                val typeStr = when (type) {
+                    CallLog.Calls.INCOMING_TYPE -> "incoming"
+                    CallLog.Calls.OUTGOING_TYPE -> "outgoing"
+                    CallLog.Calls.MISSED_TYPE -> "missed"
+                    CallLog.Calls.REJECTED_TYPE -> "rejected"
+                    else -> "unknown"
+                }
+
+                results.add(mapOf(
+                    "number" to number,
+                    "contactName" to (name ?: resolveContactName(number)),
+                    "type" to typeStr,
+                    "date" to date,
+                    "durationSeconds" to duration
+                ))
+                count++
+            }
+        }
+
+        return results
+    }
+
+    // ── SMS log ──────────────────────────────────────────────────────────────
+
+    /** Returns the last 50 SMS messages from the past 24 hours. */
+    private fun getRecentSmsLog(): List<Map<String, Any?>> {
+        val results = mutableListOf<Map<String, Any?>>()
+        val oneDayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+
+        val cursor: Cursor? = contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
+            arrayOf(
+                Telephony.Sms.ADDRESS,
+                Telephony.Sms.BODY,
+                Telephony.Sms.TYPE,
+                Telephony.Sms.DATE
+            ),
+            "${Telephony.Sms.DATE} > ?",
+            arrayOf(oneDayAgo.toString()),
+            "${Telephony.Sms.DATE} DESC"
+        )
+
+        cursor?.use {
+            val maxEntries = 50
+            var count = 0
+            while (it.moveToNext() && count < maxEntries) {
+                val address = it.getString(0) ?: ""
+                val body = it.getString(1) ?: ""
+                val type = it.getInt(2)
+                val date = it.getLong(3)
+
+                val typeStr = when (type) {
+                    Telephony.Sms.MESSAGE_TYPE_INBOX -> "received"
+                    Telephony.Sms.MESSAGE_TYPE_SENT -> "sent"
+                    Telephony.Sms.MESSAGE_TYPE_DRAFT -> "draft"
+                    else -> "unknown"
+                }
+
+                results.add(mapOf(
+                    "address" to address,
+                    "contactName" to resolveContactName(address),
+                    "body" to body,
+                    "type" to typeStr,
+                    "date" to date
+                ))
+                count++
+            }
+        }
+
+        return results
+    }
+
+    // ── Contact name resolver ────────────────────────────────────────────────
+
+    /** Tries to resolve a phone number to a contact name. Returns null if not found. */
+    private fun resolveContactName(phoneNumber: String): String? {
+        if (phoneNumber.isBlank()) return null
+        if (!hasPermission(android.Manifest.permission.READ_CONTACTS)) return null
+
+        try {
+            val uri = Uri.withAppendedPath(
+                ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                Uri.encode(phoneNumber)
+            )
+            val cursor = contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null
+            )
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    return it.getString(0)
+                }
+            }
+        } catch (_: Exception) {
+            // Security exception or other error — just return null
+        }
+        return null
     }
 }
