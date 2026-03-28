@@ -23,12 +23,13 @@ class AppLimitInfo {
   });
 
   factory AppLimitInfo.fromMap(Map<String, dynamic> d) => AppLimitInfo(
-    packageName: d['packageName'] as String? ?? '',
-    appName: d['appName'] as String? ?? '',
-    dailyLimitMinutes: d['dailyLimitMinutes'] as int? ?? 60,
-    isBlocked: (d['dailyLimitMinutes'] as int?) == 0 && (d['isEnabled'] as bool? ?? true),
-    allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
-  );
+        packageName: d['packageName'] as String? ?? '',
+        appName: d['appName'] as String? ?? '',
+        dailyLimitMinutes: d['dailyLimitMinutes'] as int? ?? 60,
+        isBlocked: (d['dailyLimitMinutes'] as int?) == 0 &&
+            (d['isEnabled'] as bool? ?? true),
+        allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
+      );
 }
 
 class MonitorService extends ChangeNotifier {
@@ -38,8 +39,8 @@ class MonitorService extends ChangeNotifier {
   final Battery _battery = Battery();
 
   Timer? _heartbeatTimer;
+  Timer? _commsTimer;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
-
   List<AppLimitInfo> _appLimits = [];
   List<AppLimitInfo> get appLimits => _appLimits;
 
@@ -53,8 +54,10 @@ class MonitorService extends ChangeNotifier {
   void start(String childId) {
     if (_isRunning) return;
     _isRunning = true;
+
     // Start foreground service — it will self-stop if permissions not granted
     _startForegroundService();
+
     _heartbeatTimer = Timer.periodic(
       const Duration(seconds: 30),
       (_) {
@@ -62,14 +65,27 @@ class MonitorService extends ChangeNotifier {
         unawaited(_reportAppUsage(childId));
       },
     );
+
+    // Sync communications every 5 minutes
+    _commsTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) {
+        unawaited(_reportCommunications(childId));
+      },
+    );
+
     _listenToAppLimits(childId);
     _listenToCommands(childId);
     unawaited(_sendHeartbeat(childId));
+
     // Sync installed apps once on start, then every 10 minutes
     unawaited(_syncInstalledApps(childId));
     Timer.periodic(const Duration(minutes: 10), (_) {
       unawaited(_syncInstalledApps(childId));
     });
+
+    // Sync communications once on start
+    unawaited(_reportCommunications(childId));
   }
 
   Future<void> _startForegroundService() async {
@@ -84,6 +100,7 @@ class MonitorService extends ChangeNotifier {
 
   void stop() {
     _heartbeatTimer?.cancel();
+    _commsTimer?.cancel();
     _limitsSubscription?.cancel();
     _isRunning = false;
     _stopForegroundService();
@@ -98,35 +115,46 @@ class MonitorService extends ChangeNotifier {
   Future<void> _sendHeartbeat(String childId) async {
     try {
       final batteryLevel = await _battery.batteryLevel;
+
       String locationStr = _lastLocation;
       double? lat, lng;
 
       LocationPermission permission = await Geolocator.checkPermission();
       // Don't request permission here — it's handled in PermissionsScreen
       // Just skip location if not granted
-
       if (permission == LocationPermission.always ||
           permission == LocationPermission.whileInUse) {
         try {
           final pos = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+            locationSettings:
+                const LocationSettings(accuracy: LocationAccuracy.medium),
           ).timeout(const Duration(seconds: 10));
+
           lat = pos.latitude;
           lng = pos.longitude;
+
           try {
-            final marks = await placemarkFromCoordinates(pos.latitude, pos.longitude)
-                .timeout(const Duration(seconds: 5));
+            final marks =
+                await placemarkFromCoordinates(pos.latitude, pos.longitude)
+                    .timeout(const Duration(seconds: 5));
             if (marks.isNotEmpty) {
               final m = marks.first;
-              locationStr = [m.street, m.subLocality, m.locality, m.administrativeArea]
-                  .where((s) => s != null && s.isNotEmpty).take(2).join(', ');
+              locationStr = [
+                m.street,
+                m.subLocality,
+                m.locality,
+                m.administrativeArea
+              ].where((s) => s != null && s.isNotEmpty).take(2).join(', ');
               if (locationStr.isEmpty) {
-                locationStr = '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
+                locationStr =
+                    '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
               }
             }
           } catch (_) {
-            locationStr = '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
+            locationStr =
+                '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
           }
+
           if (locationStr.isNotEmpty) _lastLocation = locationStr;
         } catch (e) {
           debugPrint('Location error: $e');
@@ -155,7 +183,8 @@ class MonitorService extends ChangeNotifier {
   /// children/{childId}/app_usage/today as a single document with apps map.
   Future<void> _reportAppUsage(String childId) async {
     try {
-      final raw = await _channel.invokeMethod<Map<Object?, Object?>>('getAppUsage');
+      final raw =
+          await _channel.invokeMethod<Map<Object?, Object?>>('getAppUsage');
       if (raw == null || raw.isEmpty) return;
 
       final now = DateTime.now();
@@ -163,7 +192,7 @@ class MonitorService extends ChangeNotifier {
           '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
 
       // Build appName lookup from current limits list
-      final limitsByPkg = { for (final l in _appLimits) l.packageName: l };
+      final limitsByPkg = {for (final l in _appLimits) l.packageName: l};
 
       final Map<String, dynamic> appsMap = {};
       for (final entry in raw.entries) {
@@ -204,21 +233,25 @@ class MonitorService extends ChangeNotifier {
 
   String _prettifyPackageName(String pkg) {
     final parts = pkg.split('.');
-    if (parts.length >= 2) return parts.last[0].toUpperCase() + parts.last.substring(1);
+    if (parts.length >= 2)
+      return parts.last[0].toUpperCase() + parts.last.substring(1);
     return pkg;
   }
 
   /// Syncs installed apps list to children/{childId}/installed_apps/current
   Future<void> _syncInstalledApps(String childId) async {
     try {
-      final raw = await _channel.invokeListMethod<Map<Object?, Object?>>('getInstalledApps');
+      final raw = await _channel
+          .invokeListMethod<Map<Object?, Object?>>('getInstalledApps');
       if (raw == null || raw.isEmpty) return;
 
-      final apps = raw.map((app) => {
-        'packageName': app['packageName'] as String? ?? '',
-        'appName': app['appName'] as String? ?? '',
-        'isSystem': app['isSystem'] as bool? ?? false,
-      }).toList();
+      final apps = raw
+          .map((app) => {
+                'packageName': app['packageName'] as String? ?? '',
+                'appName': app['appName'] as String? ?? '',
+                'isSystem': app['isSystem'] as bool? ?? false,
+              })
+          .toList();
 
       await _db
           .collection('children')
@@ -234,6 +267,109 @@ class MonitorService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Installed apps sync error: $e');
     }
+  }
+
+  // ── Communication Monitoring ──────────────────────────────────────────────
+
+  /// Reads recent call log and SMS messages and syncs to Firestore.
+  /// Writes to children/{childId}/communications/today
+  Future<void> _reportCommunications(String childId) async {
+    try {
+      // Check if we have permission first
+      final hasPermission = await _channel
+              .invokeMethod<bool>('hasCommsPermission') ??
+          false;
+      if (!hasPermission) {
+        debugPrint('Comms: permissions not granted, skipping');
+        return;
+      }
+
+      final now = DateTime.now();
+      final dateStr =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+      // ── Call log ──────────────────────────────────────────────────────
+      List<Map<String, dynamic>> calls = [];
+      try {
+        final rawCalls = await _channel
+            .invokeListMethod<Map<Object?, Object?>>('getCallLog');
+        if (rawCalls != null) {
+          calls = rawCalls.map((c) {
+            return <String, dynamic>{
+              'number': c['number'] as String? ?? '',
+              'contactName': c['contactName'] as String?,
+              'type': c['type'] as String? ?? 'unknown',
+              'date': c['date'] as int? ?? 0,
+              'durationSeconds': c['durationSeconds'] as int? ?? 0,
+            };
+          }).toList();
+        }
+      } on PlatformException catch (e) {
+        debugPrint('Call log error: ${e.message}');
+      }
+
+      // ── SMS log ───────────────────────────────────────────────────────
+      List<Map<String, dynamic>> messages = [];
+      try {
+        final rawSms = await _channel
+            .invokeListMethod<Map<Object?, Object?>>('getSmsLog');
+        if (rawSms != null) {
+          messages = rawSms.map((s) {
+            return <String, dynamic>{
+              'address': s['address'] as String? ?? '',
+              'contactName': s['contactName'] as String?,
+              'type': s['type'] as String? ?? 'unknown',
+              'date': s['date'] as int? ?? 0,
+              // Store first 200 chars of body to avoid huge Firestore docs
+              'bodyPreview': _truncate(s['body'] as String? ?? '', 200),
+            };
+          }).toList();
+        }
+      } on PlatformException catch (e) {
+        debugPrint('SMS log error: ${e.message}');
+      }
+
+      // ── Write to Firestore ────────────────────────────────────────────
+      if (calls.isNotEmpty || messages.isNotEmpty) {
+        // Compute summary stats
+        int totalCalls = calls.length;
+        int totalSms = messages.length;
+        int missedCalls =
+            calls.where((c) => c['type'] == 'missed').length;
+        int totalCallMinutes = calls.fold<int>(
+            0, (sum, c) => sum + ((c['durationSeconds'] as int) ~/ 60));
+
+        await _db
+            .collection('children')
+            .doc(childId)
+            .collection('communications')
+            .doc('today')
+            .set({
+          'date': dateStr,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'summary': {
+            'totalCalls': totalCalls,
+            'totalSms': totalSms,
+            'missedCalls': missedCalls,
+            'totalCallMinutes': totalCallMinutes,
+          },
+          'calls': calls,
+          'messages': messages,
+        });
+
+        debugPrint(
+            'Comms: synced $totalCalls calls and $totalSms messages');
+      }
+    } on MissingPluginException {
+      // Running in test / simulator — native channels not available
+    } catch (e) {
+      debugPrint('Communications sync error: $e');
+    }
+  }
+
+  String _truncate(String text, int maxLength) {
+    if (text.length <= maxLength) return text;
+    return '${text.substring(0, maxLength)}...';
   }
 
   /// Listens for parent commands (e.g., live_listen)
@@ -256,7 +392,8 @@ class MonitorService extends ChangeNotifier {
     }, onError: (e) => debugPrint('Commands listener error: $e'));
   }
 
-  void _handleLiveListenStart(String childId, Map<String, dynamic> data) {
+  void _handleLiveListenStart(
+      String childId, Map<String, dynamic> data) {
     // Write an acknowledgment to audio_clips so parent knows we received the command
     _db
         .collection('children')
@@ -279,20 +416,25 @@ class MonitorService extends ChangeNotifier {
 
   void _listenToAppLimits(String childId) {
     _limitsSubscription = _db
-        .collection('children').doc(childId).collection('appLimits')
+        .collection('children')
+        .doc(childId)
+        .collection('appLimits')
         .snapshots()
         .listen((snap) {
-      _appLimits = snap.docs.map((d) => AppLimitInfo.fromMap(d.data())).toList();
+      _appLimits =
+          snap.docs.map((d) => AppLimitInfo.fromMap(d.data())).toList();
       notifyListeners();
     }, onError: (e) => debugPrint('App limits error: $e'));
   }
 
-  // ── Accessibility ───────────────────────────────────────────────────────────
+  // ── Accessibility ─────────────────────────────────────────────────────────
 
   /// Returns true if the app has accessibility service permission.
   Future<bool> hasAccessibilityPermission() async {
     try {
-      return await _channel.invokeMethod<bool>('hasAccessibilityPermission') ?? false;
+      return await _channel
+              .invokeMethod<bool>('hasAccessibilityPermission') ??
+          false;
     } on MissingPluginException {
       return false;
     } catch (e) {
@@ -346,7 +488,7 @@ class MonitorService extends ChangeNotifier {
   /// Watch a single time request document for status changes
   Stream<Map<String, dynamic>?> watchTimeRequest(String id) {
     return _db.collection('timeRequests').doc(id).snapshots().map(
-      (snap) => snap.exists ? snap.data() : null,
-    );
+          (snap) => snap.exists ? snap.data() : null,
+        );
   }
 }
