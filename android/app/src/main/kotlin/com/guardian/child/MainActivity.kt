@@ -7,6 +7,10 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -14,6 +18,7 @@ import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
 import android.provider.Telephony
+import android.util.Log
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -22,6 +27,8 @@ import java.util.Calendar
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.guardian.child/monitor"
+    private var sirenPlayer: MediaPlayer? = null
+    private var originalVolume: Int = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -114,6 +121,24 @@ class MainActivity : FlutterActivity() {
                             hasPermission(android.Manifest.permission.READ_CALL_LOG) &&
                             hasPermission(android.Manifest.permission.READ_SMS)
                         )
+                    }
+
+                    "playSiren" -> {
+                        try {
+                            playSiren()
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("SIREN_ERROR", e.message, null)
+                        }
+                    }
+
+                    "stopSiren" -> {
+                        try {
+                            stopSiren()
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("SIREN_ERROR", e.message, null)
+                        }
                     }
 
                     else -> result.notImplemented()
@@ -315,5 +340,77 @@ class MainActivity : FlutterActivity() {
             // Security exception or other error — just return null
         }
         return null
+    }
+
+    // ── Siren ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Plays a loud siren using the ALARM stream so it overrides silent/vibrate mode.
+     * Sets volume to maximum before playing.
+     */
+    private fun playSiren() {
+        stopSiren() // Stop any existing siren first
+
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        // Save original alarm volume so we can restore it later
+        originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+
+        // Set alarm volume to maximum — this works even in silent/vibrate mode
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+        audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVolume, 0)
+
+        // Use the default alarm ringtone, fall back to notification/ringtone
+        var alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        if (alarmUri == null) {
+            alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        }
+        if (alarmUri == null) {
+            alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+        }
+
+        sirenPlayer = MediaPlayer().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            setDataSource(this@MainActivity, alarmUri!!)
+            isLooping = true
+            prepare()
+            start()
+        }
+
+        Log.d("MainActivity", "Siren started at max volume ($maxVolume)")
+    }
+
+    /**
+     * Stops the siren and restores original alarm volume.
+     */
+    private fun stopSiren() {
+        try {
+            sirenPlayer?.let { player ->
+                if (player.isPlaying) {
+                    player.stop()
+                }
+                player.release()
+            }
+            sirenPlayer = null
+
+            // Restore original volume if we saved it
+            if (originalVolume >= 0) {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.setStreamVolume(AudioManager.STREAM_ALARM, originalVolume, 0)
+                originalVolume = -1
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Error stopping siren: ${e.message}")
+        }
+    }
+
+    override fun onDestroy() {
+        stopSiren()
+        super.onDestroy()
     }
 }

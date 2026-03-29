@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -59,9 +60,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         );
-        if (shouldExit == true && context.mounted) {
-          // Pop all routes and let Android handle the exit
-          Navigator.of(context).popUntil((route) => route.isFirst);
+        if (shouldExit == true) {
+          SystemNavigator.pop();
         }
       },
       child: Scaffold(
