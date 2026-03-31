@@ -50,6 +50,9 @@ class CommandService {
         case 'siren':
           await _playSiren();
           break;
+        case 'siren_stop':
+          await _stopSiren();
+          break;
         case 'listen_start':
           // Ambient listening – placeholder for future audio streaming
           debugPrint('CommandService: listen_start received');
@@ -79,6 +82,17 @@ class CommandService {
       debugPrint('CommandService: playSiren not available on this platform');
     } catch (e) {
       debugPrint('CommandService: siren error $e');
+    }
+  }
+
+  /// Stops the device siren via the native MonitorService.
+  Future<void> _stopSiren() async {
+    try {
+      await _channel.invokeMethod<void>('stopSiren');
+    } on MissingPluginException {
+      debugPrint('CommandService: stopSiren not available on this platform');
+    } catch (e) {
+      debugPrint('CommandService: stopSiren error $e');
     }
   }
 }
