@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
-import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import '../services/monitor_service.dart';
 
 const _monitorChannel = MethodChannel('com.guardian.child/monitor');
 
@@ -21,7 +19,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   bool _notificationGranted = false;
   bool _hasUsageAccess = false;
   bool _callSmsGranted = false;
-  bool _accessibilityGranted = false;
+  bool _batteryOptimized = false;
 
   @override
   void initState() {
@@ -52,11 +50,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final phone = await Permission.phone.isGranted;
     final sms = await Permission.sms.isGranted;
     final usage = await _checkUsageAccess();
-    bool accessibility = false;
-    try {
-      final monitor = context.read<MonitorService>();
-      accessibility = await monitor.hasAccessibilityPermission();
-    } catch (_) {}
+    final battery = await _checkBatteryOptimization();
 
     if (mounted) {
       setState(() {
@@ -64,7 +58,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         _notificationGranted = notif;
         _callSmsGranted = phone && sms;
         _hasUsageAccess = usage;
-        _accessibilityGranted = accessibility;
+        _batteryOptimized = battery;
       });
     }
   }
@@ -73,6 +67,16 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     try {
       return await _monitorChannel
               .invokeMethod<bool>('hasUsageStatsPermission') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _checkBatteryOptimization() async {
+    try {
+      return await _monitorChannel
+              .invokeMethod<bool>('isIgnoringBatteryOptimizations') ??
           false;
     } catch (_) {
       return false;
@@ -139,11 +143,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     });
   }
 
-  Future<void> _requestAccessibility() async {
-    final monitor = context.read<MonitorService>();
-    await monitor.openAccessibilitySettings();
-  }
-
   void _continue() {
     // Start the monitor service now that permissions are granted
     context.go('/home');
@@ -199,13 +198,9 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                 onRequest: () async {
                   setState(() => _requesting = true);
                   await _monitorChannel
-                      .invokeMethod('openUsageStatsSettings');
-                  await Future.delayed(const Duration(seconds: 2));
-                  final granted = await _checkUsageAccess();
-                  setState(() {
-                    _hasUsageAccess = granted;
-                    _requesting = false;
-                  });
+                      .invokeMethod('openUsageAccessSettings');
+                  // State will refresh via didChangeAppLifecycleState when user returns
+                  setState(() => _requesting = false);
                 },
               ),
               const SizedBox(height: 16),
@@ -214,12 +209,18 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                 title: 'Battery Optimization',
                 description:
                     'Prevent battery optimization interference',
-                isGranted: false,
+                isGranted: _batteryOptimized,
                 onRequest: () async {
                   setState(() => _requesting = true);
                   await _monitorChannel
                       .invokeMethod('openBatteryOptimization');
-                  setState(() => _requesting = false);
+                  // Give the system dialog time to resolve, then check
+                  await Future.delayed(const Duration(seconds: 1));
+                  final granted = await _checkBatteryOptimization();
+                  setState(() {
+                    _batteryOptimized = granted;
+                    _requesting = false;
+                  });
                 },
               ),
               const SizedBox(height: 16),
@@ -230,15 +231,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                     'Read call logs and text messages for parental monitoring',
                 isGranted: _callSmsGranted,
                 onRequest: _requestCallSms,
-              ),
-              const SizedBox(height: 16),
-              _PermissionItem(
-                icon: Icons.language_outlined,
-                title: 'Browser Monitoring',
-                description:
-                    'Track browser activity using accessibility service',
-                isGranted: _accessibilityGranted,
-                onRequest: _requestAccessibility,
               ),
               const SizedBox(height: 32),
               SizedBox(

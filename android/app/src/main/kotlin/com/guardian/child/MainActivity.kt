@@ -14,6 +14,7 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
@@ -57,9 +58,28 @@ class MainActivity : FlutterActivity() {
                         result.success(hasUsageStatsPermission())
                     }
 
-                    "openUsageAccessSettings" -> {
+                    "openUsageAccessSettings", "openUsageStatsSettings" -> {
                         startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                         result.success(null)
+                    }
+
+                    "openBatteryOptimization" -> {
+                        try {
+                            val intent = Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:$packageName")
+                            )
+                            startActivity(intent)
+                        } catch (e: Exception) {
+                            // Fallback to general battery settings
+                            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
+                        result.success(null)
+                    }
+
+                    "isIgnoringBatteryOptimizations" -> {
+                        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                        result.success(pm.isIgnoringBatteryOptimizations(packageName))
                     }
 
                     "getAppUsage" -> {

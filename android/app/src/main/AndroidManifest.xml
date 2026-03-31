@@ -22,8 +22,9 @@
     <!-- Restart after reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Battery info -->
+    <!-- Battery info & optimization exemption -->
     <uses-permission android:name="android.permission.BATTERY_STATS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- App usage stats - required for UsageStatsManager (child app monitoring) -->
     <!-- This is a special permission: user must grant it via Settings > Apps > Usage access -->
