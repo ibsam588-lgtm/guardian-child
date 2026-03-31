@@ -131,9 +131,29 @@ class _GuardianChildAppState extends State<GuardianChildApp>
         if (isPaired && atPermissions) return null; // allow permissions screen
         return null;
       },
+      errorBuilder: (context, state) => Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: Colors.grey),
+              const SizedBox(height: 16),
+              Text('Page not found', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 8),
+              Text(state.uri.toString(), style: const TextStyle(color: Colors.grey)),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => context.go('/home'),
+                child: const Text('Go Home'),
+              ),
+            ],
+          ),
+        ),
+      ),
       routes: [
         GoRoute(path: '/splash', builder: (_, __) => const SplashScreen()),
         GoRoute(path: '/pair',   builder: (_, __) => const PairingScreen()),
+        GoRoute(path: '/pairing', redirect: (_, __) => '/pair'),
         GoRoute(path: '/permissions', builder: (_, __) => const PermissionsScreen()),
         GoRoute(path: '/home',   builder: (_, __) => const HomeScreen()),
         GoRoute(path: '/sos',    builder: (_, __) => const SosScreen()),

@@ -30,6 +30,22 @@ class _PairingScreenState extends State<PairingScreen> {
   String get _code => _controllers.map((c) => c.text).join();
 
   void _onDigitChanged(int index, String value) {
+    // Handle multi-character paste (e.g. user pastes full 6-digit code)
+    if (value.length > 1) {
+      final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+      for (int i = 0; i < digits.length && (index + i) < 6; i++) {
+        _controllers[index + i].text = digits[i];
+      }
+      final lastIndex = (index + digits.length - 1).clamp(0, 5);
+      if (lastIndex < 5) {
+        _focuses[lastIndex + 1].requestFocus();
+      } else {
+        _focuses[5].unfocus();
+        if (_code.length == 6) _submitCode();
+      }
+      return;
+    }
+
     if (value.isEmpty) {
       if (index > 0) _focuses[index - 1].requestFocus();
     } else {
@@ -185,9 +201,9 @@ class _DigitBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 46,
-      height: 56,
-      margin: const EdgeInsets.symmetric(horizontal: 4),
+      width: 48,
+      height: 58,
+      margin: const EdgeInsets.symmetric(horizontal: 5),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
@@ -204,7 +220,6 @@ class _DigitBox extends StatelessWidget {
           focusNode: focusNode,
           textAlign: TextAlign.center,
           keyboardType: TextInputType.number,
-          maxLength: 1,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Color(0xFF2D2D2D)),
           decoration: const InputDecoration(

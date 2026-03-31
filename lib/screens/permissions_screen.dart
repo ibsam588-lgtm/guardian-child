@@ -14,8 +14,11 @@ class PermissionsScreen extends StatefulWidget {
   State<PermissionsScreen> createState() => _PermissionsScreenState();
 }
 
-class _PermissionsScreenState extends State<PermissionsScreen> {
+class _PermissionsScreenState extends State<PermissionsScreen>
+    with WidgetsBindingObserver {
   bool _requesting = false;
+  bool _locationGranted = false;
+  bool _notificationGranted = false;
   bool _hasUsageAccess = false;
   bool _callSmsGranted = false;
   bool _accessibilityGranted = false;
@@ -23,9 +26,47 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _requestAll();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Re-check permissions when user returns from system settings
+    if (state == AppLifecycleState.resumed) {
+      _refreshPermissionStates();
+    }
+  }
+
+  Future<void> _refreshPermissionStates() async {
+    final loc = await Permission.location.isGranted;
+    final notif = await Permission.notification.isGranted;
+    final phone = await Permission.phone.isGranted;
+    final sms = await Permission.sms.isGranted;
+    final usage = await _checkUsageAccess();
+    bool accessibility = false;
+    try {
+      final monitor = context.read<MonitorService>();
+      accessibility = await monitor.hasAccessibilityPermission();
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _locationGranted = loc;
+        _notificationGranted = notif;
+        _callSmsGranted = phone && sms;
+        _hasUsageAccess = usage;
+        _accessibilityGranted = accessibility;
+      });
+    }
   }
 
   Future<bool> _checkUsageAccess() async {
@@ -41,6 +82,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
   Future<void> _requestAll() async {
     setState(() => _requesting = true);
 
+    // Request standard permissions
     await [
       Permission.location,
       Permission.notification,
@@ -48,33 +90,63 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
       Permission.sms,
     ].request();
 
-    await _checkCallSms();
-    await _checkUsageAccess();
-    await _checkAccessibility();
+    // After foreground location is granted, request background location
+    final locGranted = await Permission.location.isGranted;
+    if (locGranted) {
+      final bgStatus = await Permission.locationAlways.status;
+      if (!bgStatus.isGranted) {
+        await Permission.locationAlways.request();
+      }
+    }
+
+    await _refreshPermissionStates();
 
     if (mounted) setState(() => _requesting = false);
   }
 
-  Future<void> _checkCallSms() async {
-    final phone = await Permission.phone.isGranted;
-    final sms = await Permission.sms.isGranted;
-    setState(() => _callSmsGranted = phone && sms);
+  Future<void> _requestLocation() async {
+    setState(() => _requesting = true);
+    final status = await Permission.location.request();
+    if (status.isGranted) {
+      // Now request background location
+      await Permission.locationAlways.request();
+    }
+    final loc = await Permission.location.isGranted;
+    setState(() {
+      _locationGranted = loc;
+      _requesting = false;
+    });
+  }
+
+  Future<void> _requestNotification() async {
+    setState(() => _requesting = true);
+    await Permission.notification.request();
+    final granted = await Permission.notification.isGranted;
+    setState(() {
+      _notificationGranted = granted;
+      _requesting = false;
+    });
   }
 
   Future<void> _requestCallSms() async {
+    setState(() => _requesting = true);
     await [Permission.phone, Permission.sms].request();
-    _checkCallSms();
-  }
-
-  Future<void> _checkAccessibility() async {
-    final monitor = context.read<MonitorService>();
-    final granted = await monitor.hasAccessibilityPermission();
-    setState(() => _accessibilityGranted = granted);
+    final phone = await Permission.phone.isGranted;
+    final sms = await Permission.sms.isGranted;
+    setState(() {
+      _callSmsGranted = phone && sms;
+      _requesting = false;
+    });
   }
 
   Future<void> _requestAccessibility() async {
     final monitor = context.read<MonitorService>();
     await monitor.openAccessibilitySettings();
+  }
+
+  void _continue() {
+    // Start the monitor service now that permissions are granted
+    context.go('/home');
   }
 
   @override
@@ -106,25 +178,17 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
               _PermissionItem(
                 icon: Icons.location_on_outlined,
                 title: 'Location',
-                description: 'Real-time location tracking',
-                isGranted: false,
-                onRequest: () async {
-                  setState(() => _requesting = true);
-                  await Permission.location.request();
-                  setState(() => _requesting = false);
-                },
+                description: 'Real-time location tracking (always)',
+                isGranted: _locationGranted,
+                onRequest: _requestLocation,
               ),
               const SizedBox(height: 16),
               _PermissionItem(
                 icon: Icons.notifications_outlined,
                 title: 'Notifications',
                 description: 'Send alerts and notifications',
-                isGranted: false,
-                onRequest: () async {
-                  setState(() => _requesting = true);
-                  await Permission.notification.request();
-                  setState(() => _requesting = false);
-                },
+                isGranted: _notificationGranted,
+                onRequest: _requestNotification,
               ),
               const SizedBox(height: 16),
               _PermissionItem(
@@ -180,9 +244,8 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed:
-                      _requesting ? null : () => context.go('/pairing'),
-                  child: const Text('Continue to Pairing'),
+                  onPressed: _requesting ? null : _continue,
+                  child: const Text('Continue'),
                 ),
               ),
             ],
@@ -270,4 +333,3 @@ class _PermissionItem extends StatelessWidget {
     );
   }
 }
-
