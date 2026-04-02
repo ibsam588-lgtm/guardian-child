@@ -87,7 +87,7 @@ class _PairingScreenState extends State<PairingScreen> {
     return Scaffold(
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 28),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
           child: Column(
             children: [
               const SizedBox(height: 60),
