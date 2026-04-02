@@ -107,7 +107,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       body: SafeArea(
         child: Center(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
             child: _sent ? _sentView() : _sosView(),
           ),
         ),
