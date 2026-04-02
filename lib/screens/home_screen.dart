@@ -71,7 +71,7 @@ class _HomeScreenState extends State<HomeScreen> {
             // ── Header ──────────────────────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
                 child: Row(
                   children: [
                     Expanded(
@@ -117,7 +117,7 @@ class _HomeScreenState extends State<HomeScreen> {
             // ── Status card ──────────────────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
                 child: _StatusCard(
                   batteryLevel: _batteryLevel,
                   location: monitor.lastLocation,
@@ -157,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 (ctx, i) {
                   if (monitor.appLimits.isEmpty) {
                     return Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
                       child: _EmptyLimits(),
                     );
                   }
@@ -433,7 +433,7 @@ class _RecentRequests extends StatelessWidget {
       builder: (ctx, snap) {
         if (snap.hasError) {
           return Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
             child: Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -461,7 +461,7 @@ class _RecentRequests extends StatelessWidget {
         final topDocs = docs.take(5).toList();
         if (topDocs.isEmpty) {
           return Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
             child: Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
