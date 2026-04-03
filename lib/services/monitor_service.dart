@@ -48,6 +48,12 @@ class MonitorService extends ChangeNotifier {
   String _lastLocation = 'Unknown';
   String get lastLocation => _lastLocation;
 
+  /// Returns today's date as yyyy-MM-dd for document IDs
+  String get _todayDocId {
+    final now = DateTime.now();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+
   // ignore: avoid_unused_constructor_parameters
   MonitorService(SharedPreferences _);
 
@@ -213,7 +219,7 @@ class MonitorService extends ChangeNotifier {
             .collection('children')
             .doc(childId)
             .collection('app_usage')
-            .doc('today')
+            .doc(_todayDocId)
             .set({
           'apps': appsMap,
           'date': dateStr,
@@ -343,7 +349,7 @@ class MonitorService extends ChangeNotifier {
             .collection('children')
             .doc(childId)
             .collection('communications')
-            .doc('today')
+            .doc(_todayDocId)
             .set({
           'date': dateStr,
           'updatedAt': FieldValue.serverTimestamp(),
