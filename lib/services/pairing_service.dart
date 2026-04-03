@@ -162,7 +162,10 @@ class PairingService extends ChangeNotifier {
   /// Unpair — called from settings if child wants to reset
   Future<void> unpair() async {
     if (childId != null) {
-      await _db.collection('children').doc(childId).update({'isOnline': false});
+      await _db.collection('children').doc(childId).update({
+        'isOnline': false,
+        'childAuthUid': FieldValue.delete(),
+      });
     }
     await _prefs.remove(_kChildIdKey);
     await _prefs.remove(_kParentUidKey);
