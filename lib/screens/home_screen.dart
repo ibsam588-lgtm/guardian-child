@@ -32,7 +32,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pairing = context.read<PairingService>();
+    final pairing = context.watch<PairingService>();
     final monitor = context.watch<MonitorService>();
     final childName = pairing.childName ?? 'Hey!';
     final childId = pairing.childId;
