@@ -79,7 +79,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<FcmService>().init(context);
+      context.read<FcmService>().init(context.read<PairingService>());
     });
   }
 
