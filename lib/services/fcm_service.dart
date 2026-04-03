@@ -1,7 +1,6 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:provider/provider.dart';
 import 'pairing_service.dart';
 
 class FcmService {
@@ -10,10 +9,9 @@ class FcmService {
 
   String? _childId;
 
-  Future<void> init(BuildContext context) async {
+  Future<void> init(PairingService pairing) async {
     try {
-      // Cache the childId so we don't need context later
-      final pairing = context.read<PairingService>();
+      // Get childId directly from the passed service
       _childId = pairing.childId;
 
       // If no childId yet (not paired), skip FCM setup entirely
