@@ -16,6 +16,7 @@ class SosScreen extends StatefulWidget {
 
 class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMixin {
   late AnimationController _pulseCtrl;
+  Timer? _autoResetTimer;
   bool _sending = false;
   bool _sent = false;
   String? _error;
@@ -31,6 +32,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
 
   @override
   void dispose() {
+    _autoResetTimer?.cancel();
     _pulseCtrl.dispose();
     super.dispose();
   }
@@ -82,7 +84,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       setState(() { _sending = false; _sent = true; });
 
       // Auto-cancel SOS after 30 seconds (parent will have seen it)
-      Timer(const Duration(seconds: 30), () {
+      _autoResetTimer = Timer(const Duration(seconds: 30), () {
         unawaited(FirebaseFirestore.instance.collection('children').doc(childId).update({
           'sosActive': false,
         }));
