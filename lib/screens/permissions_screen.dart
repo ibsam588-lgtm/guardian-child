@@ -197,8 +197,12 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                 isGranted: _hasUsageAccess,
                 onRequest: () async {
                   setState(() => _requesting = true);
-                  await _monitorChannel
-                      .invokeMethod('openUsageAccessSettings');
+                  try {
+                    await _monitorChannel
+                        .invokeMethod('openUsageAccessSettings');
+                  } catch (_) {
+                    // Gracefully handle MissingPluginException
+                  }
                   // State will refresh via didChangeAppLifecycleState when user returns
                   setState(() => _requesting = false);
                 },
@@ -212,8 +216,12 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                 isGranted: _batteryOptimized,
                 onRequest: () async {
                   setState(() => _requesting = true);
-                  await _monitorChannel
-                      .invokeMethod('openBatteryOptimization');
+                  try {
+                    await _monitorChannel
+                        .invokeMethod('openBatteryOptimization');
+                  } catch (_) {
+                    // Gracefully handle MissingPluginException
+                  }
                   // Give the system dialog time to resolve, then check
                   await Future.delayed(const Duration(seconds: 1));
                   final granted = await _checkBatteryOptimization();
