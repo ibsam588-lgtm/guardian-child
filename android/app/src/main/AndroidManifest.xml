@@ -18,6 +18,7 @@
     <!-- Foreground service - keeps app alive in background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <!-- Restart after reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -60,6 +61,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Block screen shown when a child's app has exceeded its daily limit -->
+        <activity
+            android:name=".AppBlockedActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:theme="@style/LaunchTheme" />
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
@@ -69,6 +78,13 @@
             android:name=".MonitorService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!-- Siren alarm service — runs even when the app is closed -->
+        <service
+            android:name=".SirenService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="false" />
 
         <!-- Boot receiver to restart monitoring -->
         <receiver

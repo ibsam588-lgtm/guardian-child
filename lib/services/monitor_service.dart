@@ -11,6 +11,7 @@ class AppLimitInfo {
   final String packageName;
   final String appName;
   final int dailyLimitMinutes;
+  final bool isEnabled;
   final bool isBlocked;
   final bool allowTimeRequests;
 
@@ -18,6 +19,7 @@ class AppLimitInfo {
     required this.packageName,
     required this.appName,
     required this.dailyLimitMinutes,
+    required this.isEnabled,
     required this.isBlocked,
     required this.allowTimeRequests,
   });
@@ -26,6 +28,7 @@ class AppLimitInfo {
         packageName: d['packageName'] as String? ?? '',
         appName: d['appName'] as String? ?? '',
         dailyLimitMinutes: d['dailyLimitMinutes'] as int? ?? 60,
+        isEnabled: d['isEnabled'] as bool? ?? true,
         isBlocked: (d['dailyLimitMinutes'] as int?) == 0 &&
             (d['isEnabled'] as bool? ?? true),
         allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
@@ -66,17 +69,19 @@ class MonitorService extends ChangeNotifier {
     // Start foreground service — it will self-stop if permissions not granted
     _startForegroundService();
 
+    // Location + usage + enforcement every 2 minutes
     _heartbeatTimer = Timer.periodic(
-      const Duration(seconds: 30),
+      const Duration(minutes: 2),
       (_) {
         unawaited(_sendHeartbeat(childId));
         unawaited(_reportAppUsage(childId));
+        unawaited(_checkAndEnforceLimits(childId));
       },
     );
 
-    // Sync communications every 5 minutes
+    // Sync communications every 2 minutes
     _commsTimer = Timer.periodic(
-      const Duration(minutes: 5),
+      const Duration(minutes: 2),
       (_) {
         unawaited(_reportCommunications(childId));
       },
@@ -180,6 +185,17 @@ class MonitorService extends ChangeNotifier {
       if (lat != null && lng != null) {
         update['lastLat'] = lat;
         update['lastLng'] = lng;
+        // Write a history point so the parent app can draw a route polyline
+        await _db
+            .collection('children')
+            .doc(childId)
+            .collection('location_history')
+            .add({
+          'lat': lat,
+          'lng': lng,
+          'address': locationStr,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
       }
 
       await _db.collection('children').doc(childId).update(update);
@@ -241,10 +257,54 @@ class MonitorService extends ChangeNotifier {
     }
   }
 
+  /// Checks app usage against configured limits and launches the block screen
+  /// for any app that is currently in the foreground and has exceeded its limit.
+  Future<void> _checkAndEnforceLimits(String childId) async {
+    if (_appLimits.isEmpty) return;
+    try {
+      final raw =
+          await _channel.invokeMethod<Map<Object?, Object?>>('getAppUsage');
+      if (raw == null) return;
+
+      String? currentPkg;
+      try {
+        currentPkg =
+            await _channel.invokeMethod<String?>('getCurrentForegroundApp');
+      } on PlatformException {
+        return;
+      }
+      if (currentPkg == null || currentPkg.isEmpty) return;
+
+      for (final limit in _appLimits) {
+        if (!limit.isEnabled) continue;
+        final minutesUsed = (raw[limit.packageName] as num?)?.toInt() ?? 0;
+        final shouldBlock = limit.isBlocked ||
+            (limit.dailyLimitMinutes > 0 && minutesUsed >= limit.dailyLimitMinutes);
+
+        if (shouldBlock && currentPkg == limit.packageName) {
+          await _channel.invokeMethod<void>(
+            'launchBlockScreen',
+            {'packageName': limit.packageName},
+          );
+          break;
+        }
+      }
+    } on MissingPluginException {
+      // Simulator / test — no native channels available
+    } on PlatformException catch (e) {
+      if (e.code != 'PERMISSION_DENIED') {
+        debugPrint('Limit enforcement error: ${e.message}');
+      }
+    } catch (e) {
+      debugPrint('Limit enforcement error: $e');
+    }
+  }
+
   String _prettifyPackageName(String pkg) {
     final parts = pkg.split('.');
-    if (parts.length >= 2)
+    if (parts.length >= 2) {
       return parts.last[0].toUpperCase() + parts.last.substring(1);
+    }
     return pkg;
   }
 
@@ -286,9 +346,8 @@ class MonitorService extends ChangeNotifier {
   Future<void> _reportCommunications(String childId) async {
     try {
       // Check if we have permission first
-      final hasPermission = await _channel
-              .invokeMethod<bool>('hasCommsPermission') ??
-          false;
+      final hasPermission =
+          await _channel.invokeMethod<bool>('hasCommsPermission') ?? false;
       if (!hasPermission) {
         debugPrint('Comms: permissions not granted, skipping');
         return;
@@ -301,8 +360,8 @@ class MonitorService extends ChangeNotifier {
       // ── Call log ──────────────────────────────────────────────────────
       List<Map<String, dynamic>> calls = [];
       try {
-        final rawCalls = await _channel
-            .invokeListMethod<Map<Object?, Object?>>('getCallLog');
+        final rawCalls =
+            await _channel.invokeListMethod<Map<Object?, Object?>>('getCallLog');
         if (rawCalls != null) {
           calls = rawCalls.map((c) {
             return <String, dynamic>{
@@ -321,8 +380,8 @@ class MonitorService extends ChangeNotifier {
       // ── SMS log ───────────────────────────────────────────────────────
       List<Map<String, dynamic>> messages = [];
       try {
-        final rawSms = await _channel
-            .invokeListMethod<Map<Object?, Object?>>('getSmsLog');
+        final rawSms =
+            await _channel.invokeListMethod<Map<Object?, Object?>>('getSmsLog');
         if (rawSms != null) {
           messages = rawSms.map((s) {
             return <String, dynamic>{
@@ -341,12 +400,11 @@ class MonitorService extends ChangeNotifier {
 
       // ── Write to Firestore ────────────────────────────────────────────
       if (calls.isNotEmpty || messages.isNotEmpty) {
-        // Compute summary stats
-        int totalCalls = calls.length;
-        int totalSms = messages.length;
-        int missedCalls =
+        final int totalCalls = calls.length;
+        final int totalSms = messages.length;
+        final int missedCalls =
             calls.where((c) => c['type'] == 'missed').length;
-        int totalCallMinutes = calls.fold<int>(
+        final int totalCallMinutes = calls.fold<int>(
             0, (sum, c) => sum + ((c['durationSeconds'] as int) ~/ 60));
 
         await _db
@@ -367,8 +425,7 @@ class MonitorService extends ChangeNotifier {
           'messages': messages,
         });
 
-        debugPrint(
-            'Comms: synced $totalCalls calls and $totalSms messages');
+        debugPrint('Comms: synced $totalCalls calls and $totalSms messages');
       }
     } on MissingPluginException {
       // Running in test / simulator — native channels not available
@@ -402,14 +459,9 @@ class MonitorService extends ChangeNotifier {
     }, onError: (e) => debugPrint('Commands listener error: $e'));
   }
 
-  void _handleLiveListenStart(
-      String childId, Map<String, dynamic> data) {
+  void _handleLiveListenStart(String childId, Map<String, dynamic> data) {
     // Write an acknowledgment to audio_clips so parent knows we received the command
-    _db
-        .collection('children')
-        .doc(childId)
-        .collection('audio_clips')
-        .add({
+    _db.collection('children').doc(childId).collection('audio_clips').add({
       'status': 'recording',
       'createdAt': FieldValue.serverTimestamp(),
       'parentUid': data['parentUid'],
@@ -442,8 +494,7 @@ class MonitorService extends ChangeNotifier {
   /// Returns true if the app has accessibility service permission.
   Future<bool> hasAccessibilityPermission() async {
     try {
-      return await _channel
-              .invokeMethod<bool>('hasAccessibilityPermission') ??
+      return await _channel.invokeMethod<bool>('hasAccessibilityPermission') ??
           false;
     } on MissingPluginException {
       return false;
