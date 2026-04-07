@@ -46,6 +46,7 @@ class MonitorService extends ChangeNotifier {
   Timer? _installedAppsTimer;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
   StreamSubscription? _commandsSubscription;
+  StreamSubscription? _syncAppsSubscription;
   List<AppLimitInfo> _appLimits = [];
   List<AppLimitInfo> get appLimits => _appLimits;
 
@@ -89,6 +90,7 @@ class MonitorService extends ChangeNotifier {
 
     _listenToAppLimits(childId);
     _listenToCommands(childId);
+    _listenForSyncAppsCommand(childId);
     unawaited(_sendHeartbeat(childId));
 
     // Sync installed apps once on start, then every 10 minutes
@@ -116,6 +118,7 @@ class MonitorService extends ChangeNotifier {
     _commsTimer?.cancel();
     _installedAppsTimer?.cancel();
     _commandsSubscription?.cancel();
+    _syncAppsSubscription?.cancel();
     _limitsSubscription?.cancel();
     _isRunning = false;
     _stopForegroundService();
@@ -457,6 +460,37 @@ class MonitorService extends ChangeNotifier {
         _handleLiveListenStop(childId);
       }
     }, onError: (e) => debugPrint('Commands listener error: $e'));
+  }
+
+  /// Listens for a syncApps command written by the parent app.
+  /// When `{requested: true}` is detected, re-scans installed apps immediately
+  /// and clears the flag so it doesn't fire again.
+  void _listenForSyncAppsCommand(String childId) {
+    _syncAppsSubscription = _db
+        .collection('children')
+        .doc(childId)
+        .collection('commands')
+        .doc('syncApps')
+        .snapshots()
+        .listen((snap) async {
+      final data = snap.data();
+      if (data == null) return;
+      final requested = data['requested'] as bool? ?? false;
+      if (!requested) return;
+
+      // Clear the flag first to prevent duplicate triggers on reconnect
+      try {
+        await _db
+            .collection('children')
+            .doc(childId)
+            .collection('commands')
+            .doc('syncApps')
+            .set({'requested': false, 'handledAt': FieldValue.serverTimestamp()});
+      } catch (_) {}
+
+      unawaited(_syncInstalledApps(childId));
+      debugPrint('syncApps command received — re-scanning installed apps');
+    }, onError: (e) => debugPrint('syncApps listener error: $e'));
   }
 
   void _handleLiveListenStart(String childId, Map<String, dynamic> data) {
