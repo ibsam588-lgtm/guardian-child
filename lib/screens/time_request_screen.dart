@@ -57,7 +57,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
     final pairing = context.read<PairingService>();
     final monitor = context.read<MonitorService>();
 
-    final ok = await monitor.submitTimeRequest(
+    final docId = await monitor.submitTimeRequest(
       childId: pairing.childId!,
       childName: pairing.childName ?? 'Your child',
       parentUid: pairing.parentUid!,
@@ -70,8 +70,10 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
     if (!mounted) return;
     setState(() { _sending = false; });
 
-    if (ok) {
+    if (docId != null) {
       setState(() { _sent = true; });
+      // Watch for parent's response now that we have the doc ID.
+      _watchRequest(docId);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not send request. Please try again.')),

@@ -96,21 +96,27 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _sent ? const Color(0xFFF0FBF7) : const Color(0xFFFFF5F5),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded),
-          onPressed: () => context.go('/home'),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && context.mounted) context.go('/home');
+      },
+      child: Scaffold(
+        backgroundColor: _sent ? const Color(0xFFF0FBF7) : const Color(0xFFFFF5F5),
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_rounded),
+            onPressed: () => context.go('/home'),
+          ),
+          title: const Text('SOS'),
         ),
-        title: const Text('SOS'),
-      ),
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-            child: _sent ? _sentView() : _sosView(),
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+              child: _sent ? _sentView() : _sosView(),
+            ),
           ),
         ),
       ),

@@ -40,7 +40,9 @@ class MonitorService extends ChangeNotifier {
 
   Timer? _heartbeatTimer;
   Timer? _commsTimer;
+  Timer? _installedAppsTimer;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
+  StreamSubscription? _commandsSubscription;
   List<AppLimitInfo> _appLimits = [];
   List<AppLimitInfo> get appLimits => _appLimits;
 
@@ -86,7 +88,7 @@ class MonitorService extends ChangeNotifier {
 
     // Sync installed apps once on start, then every 10 minutes
     unawaited(_syncInstalledApps(childId));
-    Timer.periodic(const Duration(minutes: 10), (_) {
+    _installedAppsTimer = Timer.periodic(const Duration(minutes: 10), (_) {
       unawaited(_syncInstalledApps(childId));
     });
 
@@ -107,6 +109,8 @@ class MonitorService extends ChangeNotifier {
   void stop() {
     _heartbeatTimer?.cancel();
     _commsTimer?.cancel();
+    _installedAppsTimer?.cancel();
+    _commandsSubscription?.cancel();
     _limitsSubscription?.cancel();
     _isRunning = false;
     _stopForegroundService();
@@ -380,7 +384,7 @@ class MonitorService extends ChangeNotifier {
 
   /// Listens for parent commands (e.g., live_listen)
   void _listenToCommands(String childId) {
-    _db
+    _commandsSubscription = _db
         .collection('children')
         .doc(childId)
         .collection('commands')
@@ -462,8 +466,9 @@ class MonitorService extends ChangeNotifier {
 
   // ── Time Requests ─────────────────────────────────────────────────────────
 
-  /// Submit a time extension request from the child to the parent
-  Future<bool> submitTimeRequest({
+  /// Submit a time extension request from the child to the parent.
+  /// Returns the new Firestore doc ID on success, or null on failure.
+  Future<String?> submitTimeRequest({
     required String childId,
     required String childName,
     required String parentUid,
@@ -473,7 +478,7 @@ class MonitorService extends ChangeNotifier {
     String? childNote,
   }) async {
     try {
-      await _db.collection('timeRequests').add({
+      final ref = await _db.collection('timeRequests').add({
         'childId': childId,
         'childName': childName,
         'parentUid': parentUid,
@@ -484,10 +489,10 @@ class MonitorService extends ChangeNotifier {
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
       });
-      return true;
+      return ref.id;
     } catch (e) {
       debugPrint('submitTimeRequest error: $e');
-      return false;
+      return null;
     }
   }
 
