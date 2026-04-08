@@ -80,6 +80,10 @@ class _GuardianChildAppState extends State<GuardianChildApp>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<FcmService>().init(context.read<PairingService>());
+      final childId = context.read<PairingService>().childId;
+      if (childId != null) {
+        _commandService.start(childId);
+      }
     });
   }
 
@@ -197,7 +201,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
             _router!.go('/home');
             return true;
           },
-          child: child!,
+          child: child ?? const SizedBox.shrink(),
         );
       },
     );
