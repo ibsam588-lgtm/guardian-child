@@ -18,6 +18,7 @@
     <!-- Foreground service - keeps app alive in background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- FOREGROUND_SERVICE_MEDIA_PLAYBACK removed: SirenService now uses shortService type -->
     <!-- Restart after reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
@@ -77,11 +78,13 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
-        <!-- Siren alarm service — runs even when the app is closed -->
+        <!-- Siren alarm service — runs even when the app is closed.
+             Uses shortService type: no FOREGROUND_SERVICE_MEDIA_PLAYBACK permission needed.
+             On API 31+ the OS may stop it after ~3 min, but START_STICKY restarts it. -->
         <service
             android:name=".SirenService"
             android:exported="false"
-            android:foregroundServiceType="location"
+            android:foregroundServiceType="shortService"
             android:stopWithTask="false" />
 
         <!-- Boot receiver to restart monitoring -->
