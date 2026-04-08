@@ -18,8 +18,6 @@
     <!-- Foreground service - keeps app alive in background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-
     <!-- Restart after reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
@@ -83,7 +81,7 @@
         <service
             android:name=".SirenService"
             android:exported="false"
-            android:foregroundServiceType="mediaPlayback"
+            android:foregroundServiceType="location"
             android:stopWithTask="false" />
 
         <!-- Boot receiver to restart monitoring -->
