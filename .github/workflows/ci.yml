@@ -129,4 +129,4 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.guardian.child
           releaseFiles: build/app/outputs/bundle/release/app-release.aab
-          track: internalsharing
+          track: internal
