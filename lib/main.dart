@@ -188,22 +188,11 @@ class _GuardianChildAppState extends State<GuardianChildApp>
       theme: AppTheme.childTheme(),
       routerConfig: _router!,
       debugShowCheckedModeBanner: false,
-      builder: (context, child) {
-        return BackButtonListener(
-          onBackButtonPressed: () async {
-            final location = _router!
-                .routerDelegate.currentConfiguration.uri.toString();
-            if (location == '/home') {
-              // HomeScreen's own PopScope handles the exit dialog
-              return false;
-            }
-            // Any other screen: go back to home first
-            _router!.go('/home');
-            return true;
-          },
-          child: child ?? const Scaffold(backgroundColor: AppTheme.primary),
-        );
-      },
+      // No custom builder: BackButtonListener requires Router as an ancestor
+      // to register with its dispatcher — wrapping the Router widget itself is
+      // a no-op (Router.maybeOf returns null, dispatcher is never set).
+      // HomeScreen's PopScope handles the back-to-exit dialog; GoRouter's
+      // RootBackButtonDispatcher handles all other screens naturally.
     );
   }
 }

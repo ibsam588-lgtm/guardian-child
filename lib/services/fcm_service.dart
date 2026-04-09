@@ -30,12 +30,12 @@ class FcmService {
       FirebaseMessaging.onMessage.listen((msg) {
         final notification = msg.notification;
         if (notification != null) {
-          debugPrint('FCM foreground: \${notification.title}');
+          debugPrint('FCM foreground: ${notification.title}');
         }
       });
     } catch (e, stack) {
-      debugPrint('FCM init error: \$e');
-      debugPrint('FCM init stack: \$stack');
+      debugPrint('FCM init error: $e');
+      debugPrint('FCM init stack: $stack');
     }
   }
 
@@ -47,7 +47,7 @@ class FcmService {
         'fcmToken': token,
       }, SetOptions(merge: true));
     } catch (e) {
-      debugPrint('FCM: failed to save token: \$e');
+      debugPrint('FCM: failed to save token: $e');
     }
   }
 }

@@ -47,6 +47,7 @@ class _SplashScreenState extends State<SplashScreen>
     final pairing = context.read<PairingService>();
     if (pairing.isPaired) {
       final locStatus = await Permission.locationWhenInUse.status;
+      if (!mounted) return;
       if (locStatus.isGranted) {
         // Permissions already granted — start monitor and go straight to home.
         if (pairing.childId != null) {
