@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -24,15 +25,21 @@ class AppLimitInfo {
     required this.allowTimeRequests,
   });
 
-  factory AppLimitInfo.fromMap(Map<String, dynamic> d) => AppLimitInfo(
-        packageName: d['packageName'] as String? ?? '',
-        appName: d['appName'] as String? ?? '',
-        dailyLimitMinutes: d['dailyLimitMinutes'] as int? ?? 60,
-        isEnabled: d['isEnabled'] as bool? ?? true,
-        isBlocked: (d['dailyLimitMinutes'] as int?) == 0 &&
-            (d['isEnabled'] as bool? ?? true),
-        allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
-      );
+  factory AppLimitInfo.fromMap(Map<String, dynamic> d) {
+    final dailyLimit = d['dailyLimitMinutes'] as int? ?? 60;
+    final isEnabled = d['isEnabled'] as bool? ?? true;
+    // Prefer the explicit 'isBlocked' field written by the parent app;
+    // fall back to the implicit rule: enabled with a zero-minute daily limit.
+    final isBlocked = d['isBlocked'] as bool? ?? (isEnabled && dailyLimit == 0);
+    return AppLimitInfo(
+      packageName: d['packageName'] as String? ?? '',
+      appName: d['appName'] as String? ?? '',
+      dailyLimitMinutes: dailyLimit,
+      isEnabled: isEnabled,
+      isBlocked: isBlocked,
+      allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
+    );
+  }
 }
 
 class MonitorService extends ChangeNotifier {
@@ -44,6 +51,7 @@ class MonitorService extends ChangeNotifier {
   Timer? _heartbeatTimer;
   Timer? _commsTimer;
   Timer? _installedAppsTimer;
+  Timer? _browserSyncTimer;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
   StreamSubscription? _commandsSubscription;
   StreamSubscription? _syncAppsSubscription;
@@ -99,6 +107,12 @@ class MonitorService extends ChangeNotifier {
       unawaited(_syncInstalledApps(childId));
     });
 
+    // Sync browser history captured by BrowserMonitorService every 2 minutes
+    unawaited(_syncBrowserHistory(childId));
+    _browserSyncTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      unawaited(_syncBrowserHistory(childId));
+    });
+
     // Sync communications once on start
     unawaited(_reportCommunications(childId));
   }
@@ -117,6 +131,7 @@ class MonitorService extends ChangeNotifier {
     _heartbeatTimer?.cancel();
     _commsTimer?.cancel();
     _installedAppsTimer?.cancel();
+    _browserSyncTimer?.cancel();
     _commandsSubscription?.cancel();
     _syncAppsSubscription?.cancel();
     _limitsSubscription?.cancel();
@@ -300,6 +315,61 @@ class MonitorService extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Limit enforcement error: $e');
+    }
+  }
+
+  /// Drains URLs captured by BrowserMonitorService and writes them to
+  /// children/{childId}/browser_history/recent, merging with existing entries.
+  Future<void> _syncBrowserHistory(String childId) async {
+    try {
+      final jsonStr = await _channel
+          .invokeMethod<String>('getPendingBrowserUrls') ?? '[]';
+
+      final List<dynamic> parsed =
+          jsonStr.isEmpty || jsonStr == '[]' ? [] : jsonDecode(jsonStr) as List<dynamic>;
+
+      if (parsed.isEmpty) return;
+
+      final ref = _db
+          .collection('children')
+          .doc(childId)
+          .collection('browser_history')
+          .doc('recent');
+
+      // Read existing entries to merge
+      final existingSnap = await ref.get();
+      final existingList = ((existingSnap.data()?['entries'] as List?) ?? [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+      final newEntries = parsed.whereType<Map>().map((e) {
+        final ts = DateTime.fromMillisecondsSinceEpoch(
+            (e['timestamp'] as num?)?.toInt() ?? 0);
+        return <String, dynamic>{
+          'url':       e['url']     as String? ?? '',
+          'browser':   e['browser'] as String? ?? 'browser',
+          'visitedAt': Timestamp.fromDate(ts),
+        };
+      }).toList();
+
+      final merged = [...existingList, ...newEntries];
+      // Cap at 100 entries
+      final capped =
+          merged.length > 100 ? merged.sublist(merged.length - 100) : merged;
+
+      await ref.set({
+        'entries':   capped,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint('BrowserSync: uploaded ${newEntries.length} URL(s)');
+    } on MissingPluginException {
+      // Accessibility service not available (simulator / no channel)
+    } on PlatformException catch (e) {
+      debugPrint('BrowserSync error: ${e.message}');
+    } catch (e) {
+      debugPrint('BrowserSync error: $e');
     }
   }
 
@@ -520,6 +590,10 @@ class MonitorService extends ChangeNotifier {
       _appLimits =
           snap.docs.map((d) => AppLimitInfo.fromMap(d.data())).toList();
       notifyListeners();
+      // Enforce immediately when rules change — don't wait for the next 2-min tick.
+      if (_appLimits.isNotEmpty) {
+        unawaited(_checkAndEnforceLimits(childId));
+      }
     }, onError: (e) => debugPrint('App limits error: $e'));
   }
 
