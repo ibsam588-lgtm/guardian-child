@@ -20,6 +20,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   bool _hasUsageAccess = false;
   bool _callSmsGranted = false;
   bool _batteryOptimized = false;
+  bool _accessibilityGranted = false;
 
   @override
   void initState() {
@@ -51,6 +52,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final sms = await Permission.sms.isGranted;
     final usage = await _checkUsageAccess();
     final battery = await _checkBatteryOptimization();
+    final accessibility = await _checkAccessibility();
 
     if (mounted) {
       setState(() {
@@ -59,6 +61,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         _callSmsGranted = phone && sms;
         _hasUsageAccess = usage;
         _batteryOptimized = battery;
+        _accessibilityGranted = accessibility;
       });
     }
   }
@@ -67,6 +70,16 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     try {
       return await _monitorChannel
               .invokeMethod<bool>('hasUsageStatsPermission') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _checkAccessibility() async {
+    try {
+      return await _monitorChannel
+              .invokeMethod<bool>('hasAccessibilityPermission') ??
           false;
     } catch (_) {
       return false;
@@ -239,6 +252,25 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                     'Read call logs and text messages for parental monitoring',
                 isGranted: _callSmsGranted,
                 onRequest: _requestCallSms,
+              ),
+              const SizedBox(height: 16),
+              _PermissionItem(
+                icon: Icons.accessibility_new_outlined,
+                title: 'Accessibility Service',
+                description:
+                    'Monitor browser activity and track visited websites',
+                isGranted: _accessibilityGranted,
+                onRequest: () async {
+                  setState(() => _requesting = true);
+                  try {
+                    await _monitorChannel
+                        .invokeMethod('openAccessibilitySettings');
+                  } catch (_) {
+                    // Gracefully handle MissingPluginException
+                  }
+                  // State will refresh via didChangeAppLifecycleState when user returns
+                  setState(() => _requesting = false);
+                },
               ),
               const SizedBox(height: 32),
               SizedBox(
