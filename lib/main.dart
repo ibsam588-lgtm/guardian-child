@@ -201,7 +201,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
             _router!.go('/home');
             return true;
           },
-          child: child ?? const SizedBox.shrink(),
+          child: child ?? const Scaffold(backgroundColor: AppTheme.primary),
         );
       },
     );
