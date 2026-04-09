@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/pairing_service.dart';
-import '../services/monitor_service.dart';
 import '../theme/app_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -47,33 +46,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // Re-check after returning from settings
     await Future.delayed(const Duration(milliseconds: 500));
     _checkPermissions();
-  }
-
-  Future<void> _unpair() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Unpair device?', style: TextStyle(fontWeight: FontWeight.w700)),
-        content: const Text(
-          'This will disconnect from your parent\'s GuardIan account. You\'ll need a new code to reconnect.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.secondary),
-            child: const Text('Unpair'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true && mounted) {
-      context.read<MonitorService>().stop();
-      await context.read<PairingService>().unpair();
-      if (mounted) context.go('/pair');
-    }
   }
 
   @override
@@ -169,39 +141,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          const SizedBox(height: 20),
-          _SectionTitle('Danger Zone'),
-          GestureDetector(
-            onTap: _unpair,
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.secondary.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppTheme.secondary.withValues(alpha: 0.3)),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.link_off_rounded, color: AppTheme.secondary, size: 22),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Unpair this device',
-                          style: TextStyle(color: AppTheme.secondary, fontWeight: FontWeight.w700, fontSize: 15),
-                        ),
-                        Text('Disconnect from parent account',
-                          style: TextStyle(color: AppTheme.secondary.withValues(alpha: 0.7), fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(Icons.chevron_right_rounded, color: AppTheme.secondary),
-                ],
-              ),
-            ),
-          ),
         ],
         ),
       ),

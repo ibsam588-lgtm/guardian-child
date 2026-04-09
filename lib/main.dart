@@ -78,6 +78,16 @@ class _GuardianChildAppState extends State<GuardianChildApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // When the parent unpairs this device (e.g., via deleteChild()), stop all
+    // monitoring and clear local state. GoRouter's refreshListenable will
+    // automatically redirect to /pair once isPaired becomes false.
+    _commandService.onUnpairRequested = () {
+      if (!mounted) return;
+      context.read<MonitorService>().stop();
+      context.read<PairingService>().unpair();
+    };
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<FcmService>().init(context.read<PairingService>());
       final childId = context.read<PairingService>().childId;
