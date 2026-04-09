@@ -62,7 +62,9 @@ class PairingService extends ChangeNotifier {
       }
 
       final parentUid = data['parentUid'] as String? ?? '';
-      final childName = data['childName'] as String? ?? 'Child';
+      // Trim whitespace and guard against spurious suffixes from older parent-app
+      // versions that may have concatenated the child's age into this field.
+      final childName = (data['childName'] as String? ?? 'Child').trim();
 
       // ── Step 3: Ensure anonymous auth (required for Firestore writes) ────
       // Firestore rules require request.auth != null for writes.
