@@ -98,9 +98,8 @@
             </intent-filter>
         </receiver>
 
-        <!-- Browser activity tracking accessibility service (DISABLED: requires Play Console video disclosure) -->
-        <!-- Re-enable once prominent disclosure video is recorded and uploaded to Play Console -->
-        <!--
+        <!-- Browser activity tracking accessibility service -->
+        <!-- NOTE: requires prominent disclosure + Play Console video before publishing to production -->
         <service
             android:name=".BrowserMonitorService"
             android:exported="false"
@@ -112,7 +111,6 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
-        -->
 
         <!-- Firebase Cloud Messaging -->
         <service

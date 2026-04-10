@@ -98,13 +98,25 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "hasAccessibilityPermission" -> {
-                        // Placeholder — accessibility service is currently disabled
-                        result.success(false)
+                        val enabledServices = Settings.Secure.getString(
+                            contentResolver,
+                            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                        ) ?: ""
+                        val myService = "$packageName/${BrowserMonitorService::class.java.name}"
+                        result.success(enabledServices.contains(myService))
                     }
 
                     "openAccessibilitySettings" -> {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         result.success(null)
+                    }
+
+                    "getPendingBrowserUrls" -> {
+                        try {
+                            result.success(BrowserMonitorService.getPendingUrlsJson())
+                        } catch (e: Exception) {
+                            result.error("BROWSER_URLS_ERROR", e.message, null)
+                        }
                     }
 
                     "getCallLog" -> {
