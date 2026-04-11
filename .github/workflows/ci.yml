@@ -10,9 +10,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # âââââââââââââââââââââââââââââââââââââââââââââ
+  # ─────────────────────────────────────────────
   #  1. Analyze & Test
-  # âââââââââââââââââââââââââââââââââââââââââââââ
+  # ─────────────────────────────────────────────
   test:
     name: Analyze & Test
     runs-on: ubuntu-latest
@@ -52,9 +52,9 @@ jobs:
       - name: Test
         run: flutter test
 
-  # âââââââââââââââââââââââââââââââââââââââââââââ
+  # ─────────────────────────────────────────────
   #  2. Build & Deploy Android
-  # âââââââââââââââââââââââââââââââââââââââââââââ
+  # ─────────────────────────────────────────────
   build-and-deploy:
     name: Build & Deploy Android
     runs-on: ubuntu-latest
@@ -106,7 +106,7 @@ jobs:
               "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
             echo "Keystore configured"
           else
-            echo "No keystore secret â using debug signing"
+            echo "No keystore secret – using debug signing"
           fi
 
       - name: Install dependencies
