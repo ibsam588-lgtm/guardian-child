@@ -52,6 +52,7 @@ class MonitorService extends ChangeNotifier {
   Timer? _commsTimer;
   Timer? _installedAppsTimer;
   Timer? _browserSyncTimer;
+  Timer? _frequentEnforcementTimer;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
   StreamSubscription? _commandsSubscription;
   StreamSubscription? _syncAppsSubscription;
@@ -115,6 +116,13 @@ class MonitorService extends ChangeNotifier {
 
     // Sync communications once on start
     unawaited(_reportCommunications(childId));
+
+    // Frequent enforcement check every 15 seconds so blocked apps are stopped
+    // much faster than waiting for the 2-minute heartbeat.
+    _frequentEnforcementTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => unawaited(_checkAndEnforceLimits(childId)),
+    );
   }
 
   Future<void> _startForegroundService() async {
@@ -132,6 +140,7 @@ class MonitorService extends ChangeNotifier {
     _commsTimer?.cancel();
     _installedAppsTimer?.cancel();
     _browserSyncTimer?.cancel();
+    _frequentEnforcementTimer?.cancel();
     _commandsSubscription?.cancel();
     _syncAppsSubscription?.cancel();
     _limitsSubscription?.cancel();

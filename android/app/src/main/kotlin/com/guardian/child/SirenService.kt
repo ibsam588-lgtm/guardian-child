@@ -107,6 +107,11 @@ class SirenService : Service() {
                 alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             }
 
+            if (alarmUri == null) {
+                Log.e(TAG, "No alarm sound available on this device — cannot play siren")
+                return
+            }
+
             sirenPlayer = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
@@ -114,14 +119,18 @@ class SirenService : Service() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build()
                 )
-                setDataSource(this@SirenService, alarmUri!!)
+                setOnErrorListener { _, what, extra ->
+                    Log.e(TAG, "MediaPlayer error: what=$what extra=$extra")
+                    false
+                }
+                setDataSource(this@SirenService, alarmUri)
                 isLooping = true
                 prepare()
                 start()
             }
             Log.d(TAG, "Siren started at max volume ($maxVolume)")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to play siren: ${e.message}")
+            Log.e(TAG, "Failed to play siren", e)
         }
     }
 
