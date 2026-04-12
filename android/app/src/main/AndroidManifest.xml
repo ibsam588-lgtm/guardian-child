@@ -112,9 +112,10 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Firebase Cloud Messaging -->
+        <!-- Firebase Cloud Messaging — subclass handles siren at native layer so
+             the alarm plays even when the app is backgrounded or fully killed. -->
         <service
-            android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService"
+            android:name=".GuardianMessagingService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />

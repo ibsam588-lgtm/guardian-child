@@ -52,7 +52,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final pairing = context.read<PairingService>();
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) context.go('/home');
+      },
+      child: Scaffold(
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_rounded),
@@ -143,6 +148,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
         ],
         ),
+      ),
       ),
     );
   }
