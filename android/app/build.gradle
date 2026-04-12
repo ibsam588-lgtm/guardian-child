@@ -54,6 +54,11 @@ android {
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'
+    // Required so GuardianMessagingService can resolve RemoteMessage and
+    // FlutterFirebaseMessagingService at compile time.  The Flutter
+    // firebase_messaging plugin brings this in transitively at runtime;
+    // declaring it here makes it available on the Kotlin compile classpath.
+    implementation 'com.google.firebase:firebase-messaging:24.0.1'
 }
 
 flutter { source '../..' }
