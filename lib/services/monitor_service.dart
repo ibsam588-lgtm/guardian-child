@@ -49,6 +49,7 @@ class MonitorService extends ChangeNotifier {
   final Battery _battery = Battery();
 
   Timer? _heartbeatTimer;
+  Timer? _locationTimer;
   Timer? _commsTimer;
   Timer? _installedAppsTimer;
   Timer? _browserSyncTimer;
@@ -56,6 +57,7 @@ class MonitorService extends ChangeNotifier {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
   StreamSubscription? _commandsSubscription;
   StreamSubscription? _syncAppsSubscription;
+  StreamSubscription<Position>? _positionSubscription;
   List<AppLimitInfo> _appLimits = [];
   List<AppLimitInfo> get appLimits => _appLimits;
 
@@ -79,11 +81,21 @@ class MonitorService extends ChangeNotifier {
     // Start foreground service — it will self-stop if permissions not granted
     _startForegroundService();
 
-    // Location + usage + enforcement every 2 minutes
+    // Location (heartbeat) every 30 seconds — writes lastLat/lastLng/lastLocation/lastSeen
+    unawaited(_sendHeartbeat(childId));
+    _locationTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => unawaited(_sendHeartbeat(childId)),
+    );
+
+    // Subscribe to significant-movement updates (50 m) so location is
+    // written immediately when the child moves, without waiting for the timer.
+    unawaited(_startPositionStream(childId));
+
+    // App usage + enforcement every 2 minutes
     _heartbeatTimer = Timer.periodic(
       const Duration(minutes: 2),
       (_) {
-        unawaited(_sendHeartbeat(childId));
         unawaited(_reportAppUsage(childId));
         unawaited(_checkAndEnforceLimits(childId));
       },
@@ -100,7 +112,6 @@ class MonitorService extends ChangeNotifier {
     _listenToAppLimits(childId);
     _listenToCommands(childId);
     _listenForSyncAppsCommand(childId);
-    unawaited(_sendHeartbeat(childId));
 
     // Sync installed apps once on start, then every 10 minutes
     unawaited(_syncInstalledApps(childId));
@@ -137,10 +148,12 @@ class MonitorService extends ChangeNotifier {
 
   void stop() {
     _heartbeatTimer?.cancel();
+    _locationTimer?.cancel();
     _commsTimer?.cancel();
     _installedAppsTimer?.cancel();
     _browserSyncTimer?.cancel();
     _frequentEnforcementTimer?.cancel();
+    _positionSubscription?.cancel();
     _commandsSubscription?.cancel();
     _syncAppsSubscription?.cancel();
     _limitsSubscription?.cancel();
@@ -152,6 +165,79 @@ class MonitorService extends ChangeNotifier {
     try {
       await _channel.invokeMethod<void>('stopForegroundService');
     } catch (_) {}
+  }
+
+  /// Subscribes to position updates triggered by ≥50 m of movement.
+  /// Writes location to Firestore immediately on each update so the parent
+  /// sees the child's position without waiting for the 30-second timer.
+  Future<void> _startPositionStream(String childId) async {
+    final permission = await Geolocator.checkPermission();
+    if (permission != LocationPermission.always &&
+        permission != LocationPermission.whileInUse) {
+      return;
+    }
+
+    _positionSubscription?.cancel();
+    _positionSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.medium,
+        distanceFilter: 50, // metres
+      ),
+    ).listen(
+      (pos) => unawaited(_writePositionToFirestore(childId, pos)),
+      onError: (e) => debugPrint('Position stream error: $e'),
+    );
+  }
+
+  /// Writes a single GPS position to children/{childId} and location_history.
+  Future<void> _writePositionToFirestore(
+      String childId, Position pos) async {
+    try {
+      String locationStr =
+          '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
+
+      try {
+        final marks =
+            await placemarkFromCoordinates(pos.latitude, pos.longitude)
+                .timeout(const Duration(seconds: 5));
+        if (marks.isNotEmpty) {
+          final m = marks.first;
+          final resolved = [m.street, m.subLocality, m.locality, m.administrativeArea]
+              .where((s) => s != null && s.isNotEmpty)
+              .take(2)
+              .join(', ');
+          if (resolved.isNotEmpty) locationStr = resolved;
+        }
+      } catch (_) {
+        // geocoding failed — keep coordinate string
+      }
+
+      _lastLocation = locationStr;
+
+      await Future.wait([
+        _db.collection('children').doc(childId).update({
+          'lastLat': pos.latitude,
+          'lastLng': pos.longitude,
+          'lastLocation': locationStr,
+          'lastSeen': FieldValue.serverTimestamp(),
+        }),
+        _db
+            .collection('children')
+            .doc(childId)
+            .collection('location_history')
+            .add({
+          'lat': pos.latitude,
+          'lng': pos.longitude,
+          'address': locationStr,
+          'timestamp': FieldValue.serverTimestamp(),
+        }),
+      ]);
+
+      notifyListeners();
+      debugPrint('Location update (movement): $locationStr');
+    } catch (e) {
+      debugPrint('writePositionToFirestore error: $e');
+    }
   }
 
   Future<void> _sendHeartbeat(String childId) async {
