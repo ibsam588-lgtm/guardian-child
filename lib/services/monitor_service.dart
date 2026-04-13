@@ -215,12 +215,12 @@ class MonitorService extends ChangeNotifier {
       _lastLocation = locationStr;
 
       await Future.wait([
-        _db.collection('children').doc(childId).update({
+        _db.collection('children').doc(childId).set({
           'lastLat': pos.latitude,
           'lastLng': pos.longitude,
           'lastLocation': locationStr,
           'lastSeen': FieldValue.serverTimestamp(),
-        }),
+        }, SetOptions(merge: true)),
         _db
             .collection('children')
             .doc(childId)
@@ -311,7 +311,7 @@ class MonitorService extends ChangeNotifier {
         });
       }
 
-      await _db.collection('children').doc(childId).update(update);
+      await _db.collection('children').doc(childId).set(update, SetOptions(merge: true));
       notifyListeners();
     } catch (e) {
       debugPrint('Heartbeat error: $e');
@@ -663,9 +663,9 @@ class MonitorService extends ChangeNotifier {
     _db.collection('children').doc(childId).collection('audio_clips').add({
       'status': 'recording',
       'createdAt': FieldValue.serverTimestamp(),
-      'parentUid': data['parentUid'],
-      'durationSeconds': data['durationSeconds'] ?? 60,
-    });
+      'parentUid': data['parentUid'] as String? ?? '',
+      'durationSeconds': (data['durationSeconds'] as int?) ?? 60,
+    }).catchError((e) => debugPrint('audio_clips add error: $e'));
     debugPrint('Live listen: started recording');
     // TODO: Implement actual audio recording via platform channel
   }

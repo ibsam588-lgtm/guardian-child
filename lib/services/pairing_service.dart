@@ -164,10 +164,14 @@ class PairingService extends ChangeNotifier {
   /// Unpair — called from settings if child wants to reset
   Future<void> unpair() async {
     if (childId != null) {
-      await _db.collection('children').doc(childId).update({
-        'isOnline': false,
-        'childAuthUid': FieldValue.delete(),
-      });
+      try {
+        await _db.collection('children').doc(childId).set({
+          'isOnline': false,
+          'childAuthUid': FieldValue.delete(),
+        }, SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('PairingService: unpair Firestore error: $e');
+      }
     }
     await _prefs.remove(_kChildIdKey);
     await _prefs.remove(_kParentUidKey);
