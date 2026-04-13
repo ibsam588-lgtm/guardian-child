@@ -15,7 +15,6 @@ class CommandService {
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _docCommandsSubscription;
-  String? _childId;
 
   /// Called when the parent sends an unpair command (e.g., after deleteChild()).
   /// The registered handler should stop MonitorService and call PairingService.unpair().
@@ -23,7 +22,6 @@ class CommandService {
 
   /// Start listening for commands targeted at [childId].
   void start(String childId) {
-    _childId = childId;
     _subscription?.cancel();
     _docCommandsSubscription?.cancel();
 
@@ -98,10 +96,10 @@ class CommandService {
       }
 
       // Mark the command as executed so it is not re-processed.
-      await _db.collection('child_commands').doc(docId).update({
+      await _db.collection('child_commands').doc(docId).set({
         'executed': true,
         'executedAt': FieldValue.serverTimestamp(),
-      });
+      }, SetOptions(merge: true));
     } catch (e) {
       debugPrint('CommandService: failed to execute $type – $e');
     }

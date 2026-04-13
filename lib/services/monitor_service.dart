@@ -227,6 +227,7 @@ class MonitorService extends ChangeNotifier {
           'lastLng': pos.longitude,
           'lastLocation': locationStr,
           'lastSeen': FieldValue.serverTimestamp(),
+          'isOnline': true,
         }, SetOptions(merge: true)),
         _db
             .collection('children')
@@ -674,7 +675,7 @@ class MonitorService extends ChangeNotifier {
       'createdAt': FieldValue.serverTimestamp(),
       'parentUid': data['parentUid'],
       'durationSeconds': data['durationSeconds'] ?? 60,
-    }).catchError((e) => debugPrint('audio_clips write error: $e'));
+    }).then((_) {}, onError: (Object e) => debugPrint('audio_clips write error: $e'));
     debugPrint('Live listen: started recording');
     // TODO: Implement actual audio recording via platform channel
   }
