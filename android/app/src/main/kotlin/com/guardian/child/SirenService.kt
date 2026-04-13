@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.app.ServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
@@ -52,7 +53,18 @@ class SirenService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // Pass FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK on API 29+ so the OS knows
+        // this service plays audio. Required for the mediaPlayback foreground service
+        // type declared in the manifest (avoids a 3-minute kill limit from shortService).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         playSiren()
         // START_STICKY: if the OS kills this service, restart it automatically
         return START_STICKY
