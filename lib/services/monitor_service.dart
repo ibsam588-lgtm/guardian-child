@@ -192,6 +192,11 @@ class MonitorService extends ChangeNotifier {
   /// Writes a single GPS position to children/{childId} and location_history.
   Future<void> _writePositionToFirestore(
       String childId, Position pos) async {
+    // Guard: empty childId would create/corrupt the root 'children' collection.
+    if (childId.isEmpty) return;
+    // Guard: Firestore rejects NaN / Infinity — skip corrupt GPS readings.
+    if (!pos.latitude.isFinite || !pos.longitude.isFinite) return;
+
     try {
       String locationStr =
           '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}';
@@ -214,13 +219,15 @@ class MonitorService extends ChangeNotifier {
 
       _lastLocation = locationStr;
 
+      // Use set(merge:true) so this never throws NOT_FOUND if the parent deleted
+      // and recreated the children doc while the child app was running.
       await Future.wait([
-        _db.collection('children').doc(childId).update({
+        _db.collection('children').doc(childId).set({
           'lastLat': pos.latitude,
           'lastLng': pos.longitude,
           'lastLocation': locationStr,
           'lastSeen': FieldValue.serverTimestamp(),
-        }),
+        }, SetOptions(merge: true)),
         _db
             .collection('children')
             .doc(childId)
@@ -289,13 +296,14 @@ class MonitorService extends ChangeNotifier {
         }
       }
 
+      // Clamp battery to [0,1] and exclude non-finite GPS values before writing.
       final Map<String, dynamic> update = {
         'isOnline': true,
         'lastSeen': FieldValue.serverTimestamp(),
-        'batteryLevel': batteryLevel / 100.0,
+        'batteryLevel': (batteryLevel.clamp(0, 100)) / 100.0,
         'lastLocation': locationStr,
       };
-      if (lat != null && lng != null) {
+      if (lat != null && lng != null && lat.isFinite && lng.isFinite) {
         update['lastLat'] = lat;
         update['lastLng'] = lng;
         // Write a history point so the parent app can draw a route polyline
@@ -311,7 +319,8 @@ class MonitorService extends ChangeNotifier {
         });
       }
 
-      await _db.collection('children').doc(childId).update(update);
+      // Use set(merge:true) — never throws NOT_FOUND if the doc was deleted.
+      await _db.collection('children').doc(childId).set(update, SetOptions(merge: true));
       notifyListeners();
     } catch (e) {
       debugPrint('Heartbeat error: $e');
@@ -665,7 +674,7 @@ class MonitorService extends ChangeNotifier {
       'createdAt': FieldValue.serverTimestamp(),
       'parentUid': data['parentUid'],
       'durationSeconds': data['durationSeconds'] ?? 60,
-    });
+    }).catchError((e) => debugPrint('audio_clips write error: $e'));
     debugPrint('Live listen: started recording');
     // TODO: Implement actual audio recording via platform channel
   }

@@ -31,21 +31,26 @@ class AuthService extends ChangeNotifier {
     required double batteryLevel,
   }) async {
     if (currentUser == null) return;
-    await _db.collection('children').doc(childId).update({
+    await _db.collection('children').doc(childId).set({
       'deviceId': deviceId,
       'deviceName': deviceName,
       'isOnline': true,
       'lastSeen': FieldValue.serverTimestamp(),
       'batteryLevel': batteryLevel,
       'fcmToken': '',  // updated separately by FcmService
-    });
+    }, SetOptions(merge: true));
   }
 
   /// Called when app goes background — mark child offline
   Future<void> setOffline(String childId) async {
-    await _db.collection('children').doc(childId).update({
-      'isOnline': false,
-      'lastSeen': FieldValue.serverTimestamp(),
-    });
+    if (currentUser == null) return;
+    try {
+      await _db.collection('children').doc(childId).set({
+        'isOnline': false,
+        'lastSeen': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('setOffline error (non-fatal): $e');
+    }
   }
 }

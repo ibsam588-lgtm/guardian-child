@@ -76,18 +76,18 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       });
 
       // Also update child doc so parent sees it on dashboard
-      await FirebaseFirestore.instance.collection('children').doc(childId).update({
+      await FirebaseFirestore.instance.collection('children').doc(childId).set({
         'sosActive': true,
         'sosAt': FieldValue.serverTimestamp(),
-      });
+      }, SetOptions(merge: true));
 
       setState(() { _sending = false; _sent = true; });
 
       // Auto-cancel SOS after 30 seconds (parent will have seen it)
       _autoResetTimer = Timer(const Duration(seconds: 30), () {
-        unawaited(FirebaseFirestore.instance.collection('children').doc(childId).update({
+        unawaited(FirebaseFirestore.instance.collection('children').doc(childId).set({
           'sosActive': false,
-        }));
+        }, SetOptions(merge: true)));
       });
     } catch (e) {
       setState(() { _sending = false; _error = 'Could not send SOS. Try again.'; });
