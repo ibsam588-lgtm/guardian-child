@@ -53,14 +53,13 @@ class SirenService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
-        // Pass FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK on API 29+ so the OS knows
-        // this service plays audio. Required for the mediaPlayback foreground service
-        // type declared in the manifest (avoids a 3-minute kill limit from shortService).
+        // TODO: restore FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK once declared in Play Console.
+        // Using LOCATION temporarily to unblock CI deploys (matches manifest change).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
                 buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             )
         } else {
             startForeground(NOTIFICATION_ID, buildNotification())

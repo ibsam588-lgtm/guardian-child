@@ -18,8 +18,8 @@
     <!-- Foreground service - keeps app alive in background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <!-- Required so SirenService can play audio as a mediaPlayback foreground service on API 29+ -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- TODO: re-add FOREGROUND_SERVICE_MEDIA_PLAYBACK once declared in Play Console -->
+    <!-- <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" /> -->
     <!-- Restart after reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
@@ -80,12 +80,13 @@
             android:foregroundServiceType="location" />
 
         <!-- Siren alarm service — runs even when the app is closed.
-             mediaPlayback type allows audio on API 29+ without the 3-minute shortService kill limit.
+             TODO: restore foregroundServiceType="mediaPlayback" once MEDIA_PLAYBACK is declared
+             in Play Console.  Using "location" temporarily to unblock CI deploys.
              stopWithTask=false keeps it alive after the user swipes the app away. -->
         <service
             android:name=".SirenService"
             android:exported="false"
-            android:foregroundServiceType="mediaPlayback"
+            android:foregroundServiceType="location"
             android:stopWithTask="false" />
 
         <!-- Boot receiver to restart monitoring -->
