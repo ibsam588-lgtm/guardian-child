@@ -53,13 +53,14 @@ class SirenService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
-        // TODO: restore FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK once declared in Play Console.
-        // Using LOCATION temporarily to unblock CI deploys (matches manifest change).
+        // Pass FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK on API 29+ so the OS knows
+        // this service plays audio. Required for the mediaPlayback foreground service
+        // type declared in the manifest (avoids a 3-minute kill limit from shortService).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
                 buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
             )
         } else {
             startForeground(NOTIFICATION_ID, buildNotification())
@@ -148,23 +149,4 @@ class SirenService : Service() {
     private fun stopSiren() {
         try {
             sirenPlayer?.let { player ->
-                if (player.isPlaying) player.stop()
-                player.release()
-            }
-            sirenPlayer = null
-
-            if (originalVolume >= 0) {
-                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                audioManager.setStreamVolume(AudioManager.STREAM_ALARM, originalVolume, 0)
-                originalVolume = -1
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping siren: ${e.message}")
-        }
-    }
-
-    override fun onDestroy() {
-        stopSiren()
-        super.onDestroy()
-    }
-}
+                if (play
