@@ -149,4 +149,26 @@ class SirenService : Service() {
     private fun stopSiren() {
         try {
             sirenPlayer?.let { player ->
-                if (play
+                if (player.isPlaying) {
+                    player.stop()
+                }
+                player.release()
+            }
+            sirenPlayer = null
+
+            // Restore original volume if we changed it
+            if (originalVolume >= 0) {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.setStreamVolume(AudioManager.STREAM_ALARM, originalVolume, 0)
+                originalVolume = -1
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to stop siren", e)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopSiren()
+    }
+}
