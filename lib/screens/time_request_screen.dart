@@ -10,13 +10,20 @@ class TimeRequestScreen extends StatefulWidget {
   final String appName;
   final String packageName;
   final String? requestId; // if already submitted, watch this
+  /// "blocked" — asking parent for permission to use a blocked app.
+  /// "limit_reached" (default) — asking parent for more time on an
+  /// app whose daily limit has been reached.
+  final String? reason;
 
   const TimeRequestScreen({
     super.key,
     required this.appName,
     required this.packageName,
     this.requestId,
+    this.reason,
   });
+
+  bool get _isPermission => reason == 'blocked';
 
   @override
   State<TimeRequestScreen> createState() => _TimeRequestScreenState();
@@ -65,6 +72,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
       packageName: widget.packageName,
       requestedMinutes: _selectedMinutes,
       childNote: _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
+      kind: widget._isPermission ? 'permission' : 'time',
     );
 
     if (!mounted) return;
@@ -98,7 +106,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
           icon: const Icon(Icons.arrow_back_ios_rounded),
           onPressed: () => context.go('/home'),
         ),
-        title: const Text('Ask for More Time'),
+        title: Text(widget._isPermission ? 'Ask for Permission' : 'Ask for More Time'),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -134,7 +142,12 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Requesting more time for', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  Text(
+                    widget._isPermission
+                        ? 'Requesting permission for'
+                        : 'Requesting more time for',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
                   Text(
                     widget.appName,
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF2D2D2D)),

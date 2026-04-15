@@ -73,6 +73,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
   // Cache the router so it's NEVER rebuilt — rebuilding resets navigation
   GoRouter? _router;
   final _commandService = CommandService();
+  static const _nativeChannel = MethodChannel('com.guardian.child/monitor');
 
   @override
   void initState() {
@@ -88,12 +89,32 @@ class _GuardianChildAppState extends State<GuardianChildApp>
       context.read<PairingService>().unpair();
     };
 
+    // Listen for deep-link navigation pushed from native — e.g. when the
+    // AppBlockedActivity's "Ask Parent" button relaunches this activity while
+    // Flutter is already running.
+    _nativeChannel.setMethodCallHandler((call) async {
+      if (call.method == 'navigateTo') {
+        final args = (call.arguments as Map?)?.cast<Object?, Object?>();
+        _handleNativeRoute(args);
+      }
+      return null;
+    });
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<FcmService>().init(context.read<PairingService>());
       final childId = context.read<PairingService>().childId;
       if (childId != null) {
+        // Start MonitorService on cold launch — didChangeAppLifecycleState's
+        // `resumed` case doesn't fire on initial app start, so without this
+        // browser-history sync / location updates / limit enforcement never
+        // run until the user backgrounds and foregrounds the app.
+        context.read<MonitorService>().start(childId);
         _commandService.start(childId);
       }
+
+      // If the activity was launched from a deep-link intent (e.g. the
+      // "Ask Parent" button on the block screen), pick it up and route.
+      unawaited(_consumePendingRoute());
     });
   }
 
@@ -126,6 +147,34 @@ class _GuardianChildAppState extends State<GuardianChildApp>
       default:
         break;
     }
+  }
+
+  Future<void> _consumePendingRoute() async {
+    try {
+      final raw = await _nativeChannel
+          .invokeMethod<Map<Object?, Object?>>('getPendingRoute');
+      if (raw == null) return;
+      _handleNativeRoute(raw);
+    } catch (e) {
+      debugPrint('consumePendingRoute error: $e');
+    }
+  }
+
+  void _handleNativeRoute(Map<Object?, Object?>? args) {
+    if (args == null) return;
+    final route = args['route'] as String? ?? '';
+    if (route != '/time-request') return;
+
+    final extras = <String, dynamic>{
+      'appName': args['appName'] as String? ?? 'an app',
+      'packageName': args['packageName'] as String? ?? '',
+      if (args['reason'] != null) 'reason': args['reason'] as String?,
+    };
+    // Defer to next frame so the router is guaranteed to be mounted.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _router?.go('/time-request', extra: extras);
+    });
   }
 
   GoRouter _buildRouter(PairingService pairing) {
@@ -179,6 +228,7 @@ class _GuardianChildAppState extends State<GuardianChildApp>
               appName: extra['appName'] as String? ?? 'an app',
               packageName: extra['packageName'] as String? ?? '',
               requestId: extra['requestId'] as String?,
+              reason: extra['reason'] as String?,
             );
           },
         ),

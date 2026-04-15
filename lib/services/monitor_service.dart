@@ -405,9 +405,17 @@ class MonitorService extends ChangeNotifier {
             (limit.dailyLimitMinutes > 0 && minutesUsed >= limit.dailyLimitMinutes);
 
         if (shouldBlock && currentPkg == limit.packageName) {
+          // Differentiate "parent hard-blocked this app" from "daily time limit
+          // reached" so the block screen can show the right copy and CTA.
+          final reason = limit.isBlocked ? 'blocked' : 'limit_reached';
           await _channel.invokeMethod<void>(
             'launchBlockScreen',
-            {'packageName': limit.packageName},
+            {
+              'packageName': limit.packageName,
+              'appName': limit.appName,
+              'reason': reason,
+              'allowTimeRequests': limit.allowTimeRequests,
+            },
           );
           break;
         }
@@ -746,6 +754,12 @@ class MonitorService extends ChangeNotifier {
 
   /// Submit a time extension request from the child to the parent.
   /// Returns the new Firestore doc ID on success, or null on failure.
+  ///
+  /// [kind] is either:
+  ///   - "time"       — asking for extra minutes on an app whose limit
+  ///                    has been reached (default).
+  ///   - "permission" — asking for permission to use an app that is
+  ///                    hard-blocked by the parent.
   Future<String?> submitTimeRequest({
     required String childId,
     required String childName,
@@ -754,6 +768,7 @@ class MonitorService extends ChangeNotifier {
     required String packageName,
     required int requestedMinutes,
     String? childNote,
+    String kind = 'time',
   }) async {
     try {
       final ref = await _db.collection('timeRequests').add({
@@ -764,9 +779,36 @@ class MonitorService extends ChangeNotifier {
         'packageName': packageName,
         'requestedMinutes': requestedMinutes,
         'childNote': childNote ?? '',
+        'kind': kind,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
+        'expiresAt': Timestamp.fromDate(
+          DateTime.now().add(const Duration(minutes: 10)),
+        ),
       });
+
+      // Also write an `alerts` doc so the parent app — which already
+      // listens to the `alerts` collection on the home screen — shows a
+      // real-time banner / notification. The time_requests_screen watches
+      // `timeRequests` directly, so this is purely to wake the parent up.
+      final isPermission = kind == 'permission';
+      unawaited(_db.collection('alerts').add({
+        'childId': childId,
+        'parentUid': parentUid,
+        'type': isPermission ? 'permission_request' : 'time_request',
+        'title': isPermission
+            ? '$childName is asking for permission'
+            : '$childName is asking for more time',
+        'subtitle': isPermission
+            ? 'Wants to use $appName (blocked).'
+            : 'Wants $requestedMinutes more min on $appName.',
+        'requestId': ref.id,
+        'packageName': packageName,
+        'appName': appName,
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+      }));
+
       return ref.id;
     } catch (e) {
       debugPrint('submitTimeRequest error: $e');

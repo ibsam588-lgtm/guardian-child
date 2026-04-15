@@ -26,18 +26,55 @@ import java.util.Calendar
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.guardian.child/monitor"
 
+    /** Holds a deep-link intent (e.g. from AppBlockedActivity's "Ask Parent"
+     *  button) until Flutter is ready to consume it via `getInitialRoute`. */
+    private var pendingRoute: Map<String, Any?>? = null
+    private var methodChannel: MethodChannel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // NOTE: Do NOT start MonitorService here — it needs location permission
         // and the child must be paired first. Flutter controls it via MethodChannel.
+        captureRouteFromIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        captureRouteFromIntent(intent)
+        pendingRoute?.let { route ->
+            // Already-running app — push the route straight to Flutter.
+            methodChannel?.invokeMethod("navigateTo", route)
+            pendingRoute = null
+        }
+    }
+
+    /** Extracts the "route" + related extras from an intent into [pendingRoute]. */
+    private fun captureRouteFromIntent(intent: Intent?) {
+        val route = intent?.getStringExtra("route") ?: return
+        pendingRoute = mapOf(
+            "route" to route,
+            "packageName" to intent.getStringExtra("packageName"),
+            "appName" to intent.getStringExtra("appName"),
+            "reason" to intent.getStringExtra("reason"),
+        )
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        methodChannel!!
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+
+                    "getPendingRoute" -> {
+                        // Flutter polls this once on startup to pick up any
+                        // deep-link intent that launched the activity.
+                        val route = pendingRoute
+                        pendingRoute = null
+                        result.success(route)
+                    }
+
 
                     "startForegroundService" -> {
                         MonitorService.start(this)
@@ -182,9 +219,16 @@ class MainActivity : FlutterActivity() {
 
                     "launchBlockScreen" -> {
                         val packageName = call.argument<String>("packageName") ?: ""
+                        val appName = call.argument<String>("appName") ?: ""
+                        val reason = call.argument<String>("reason")
+                            ?: AppBlockedActivity.REASON_LIMIT_REACHED
+                        val allowTimeRequests = call.argument<Boolean>("allowTimeRequests") ?: true
                         try {
                             val intent = Intent(this, AppBlockedActivity::class.java).apply {
-                                putExtra("packageName", packageName)
+                                putExtra(AppBlockedActivity.EXTRA_PACKAGE_NAME, packageName)
+                                putExtra(AppBlockedActivity.EXTRA_APP_NAME, appName)
+                                putExtra(AppBlockedActivity.EXTRA_REASON, reason)
+                                putExtra(AppBlockedActivity.EXTRA_ALLOW_TIME_REQUESTS, allowTimeRequests)
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                             }
                             startActivity(intent)
