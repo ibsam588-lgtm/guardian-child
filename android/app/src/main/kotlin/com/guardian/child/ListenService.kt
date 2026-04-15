@@ -47,6 +47,31 @@ class ListenService : Service() {
 
         const val EXTRA_CHILD_ID = "childId"
 
+        /**
+         * Write a status update to children/{childId}/listen_status/current
+         * so the parent UI can show "recording", "no mic permission", etc.
+         * instead of sitting on "Connecting…" forever when something goes
+         * wrong on the child.
+         */
+        private fun writeStatus(childId: String, state: String, message: String? = null) {
+            if (childId.isBlank()) return
+            try {
+                val data = hashMapOf<String, Any>(
+                    "state" to state,
+                    "updatedAt" to Timestamp.now(),
+                )
+                if (message != null) data["message"] = message
+                FirebaseFirestore.getInstance()
+                    .collection("children")
+                    .document(childId)
+                    .collection("listen_status")
+                    .document("current")
+                    .set(data)
+            } catch (e: Exception) {
+                Log.w(TAG, "writeStatus failed: ${e.message}")
+            }
+        }
+
         fun start(context: Context, childId: String) {
             // Mic permission must be granted — otherwise Android will
             // kill the foreground service with a SecurityException the
@@ -55,8 +80,10 @@ class ListenService : Service() {
                     context, Manifest.permission.RECORD_AUDIO
                 ) != PackageManager.PERMISSION_GRANTED) {
                 Log.w(TAG, "RECORD_AUDIO not granted — aborting start")
+                writeStatus(childId, "error", "Microphone permission not granted on child device")
                 return
             }
+            writeStatus(childId, "starting")
             val intent = Intent(context, ListenService::class.java)
                 .putExtra(EXTRA_CHILD_ID, childId)
             try {
@@ -67,6 +94,7 @@ class ListenService : Service() {
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "start failed: ${e.message}")
+                writeStatus(childId, "error", "Could not start listen service: ${e.message}")
             }
         }
 
@@ -131,9 +159,11 @@ class ListenService : Service() {
             startedAtMs = System.currentTimeMillis()
             try {
                 startChunk()
+                writeStatus(childId, "recording")
                 handler.postDelayed(rotateChunkRunnable, CHUNK_MS)
             } catch (e: Exception) {
                 Log.e(TAG, "failed to start recording: ${e.message}")
+                writeStatus(childId, "error", "MediaRecorder failed: ${e.message}")
                 stopSelf()
             }
         }
@@ -153,6 +183,7 @@ class ListenService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "onDestroy cleanup: ${e.message}")
         }
+        writeStatus(childId, "stopped")
         super.onDestroy()
     }
 
