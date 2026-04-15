@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- NOTE: `android:packageNames` is intentionally omitted. Pre-filtering events
+     at the framework layer means any browser we forgot to enumerate (vendor
+     forks, region-specific builds) would be invisible to us. Instead the
+     BrowserMonitorService filters by BROWSER_PACKAGES at runtime so new
+     browsers only require a Kotlin-side code update. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
       android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
       android:accessibilityFeedbackType="feedbackGeneric"
-      android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews"
+      android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
       android:canRetrieveWindowContent="true"
-      android:notificationTimeout="300"
-      android:packageNames="com.android.chrome,com.chrome.beta,com.chrome.dev,com.chrome.canary,org.mozilla.firefox,org.mozilla.firefox_beta,com.opera.browser,com.opera.mini.native,com.microsoft.emmx,com.brave.browser,com.duckduckgo.mobile.android,com.sec.android.app.sbrowser"
+      android:notificationTimeout="500"
       android:description="@string/accessibility_service_description" />

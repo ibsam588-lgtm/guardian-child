@@ -143,16 +143,38 @@ class BrowserMonitorService : AccessibilityService() {
     }
 
     private fun extractUrl(node: AccessibilityNodeInfo): String {
-        // Try known URL-bar view IDs for each browser
+        // Try known URL-bar view IDs for each browser. We keep a generous list
+        // because Chrome has renamed the omnibox a few times, vendor forks
+        // reuse different IDs, and Samsung Internet / Edge / Firefox all
+        // diverge.
         val urlBarIds = listOf(
+            // Chrome (stable + channels) — current and historical IDs
             "com.android.chrome:id/url_bar",
+            "com.android.chrome:id/location_bar",
             "com.android.chrome:id/omnibox_text",
+            "com.android.chrome:id/search_box_text",
+            "com.chrome.beta:id/url_bar",
+            "com.chrome.dev:id/url_bar",
+            "com.chrome.canary:id/url_bar",
+            // Firefox (Fenix / legacy)
             "org.mozilla.firefox:id/url_bar_title",
             "org.mozilla.firefox:id/mozac_browser_toolbar_url_view",
+            "org.mozilla.firefox:id/mozac_browser_toolbar_background",
+            "org.mozilla.firefox_beta:id/mozac_browser_toolbar_url_view",
+            // Opera
             "com.opera.browser:id/url_field",
+            "com.opera.mini.native:id/url_field",
+            // Edge — same codebase as Chromium
             "com.microsoft.emmx:id/url_bar",
+            "com.microsoft.emmx:id/location_bar",
+            // Brave
             "com.brave.browser:id/url_bar",
-            "com.sec.android.app.sbrowser:id/location_bar_edit_text"
+            "com.brave.browser:id/location_bar",
+            // DuckDuckGo
+            "com.duckduckgo.mobile.android:id/omnibarTextInput",
+            // Samsung Internet
+            "com.sec.android.app.sbrowser:id/location_bar_edit_text",
+            "com.sec.android.app.sbrowser:id/url_bar"
         )
 
         for (id in urlBarIds) {
@@ -160,20 +182,33 @@ class BrowserMonitorService : AccessibilityService() {
             if (!nodes.isNullOrEmpty()) {
                 val text = nodes[0].text?.toString() ?: ""
                 nodes.forEach { it.recycle() }
-                if (text.isNotEmpty()) return text
+                if (text.isNotEmpty() && looksLikeUrl(text)) return text
             }
         }
 
-        // Fallback: search for an EditText node whose content looks like a URL
+        // Fallback: search the subtree for any EditText / TextView whose
+        // contents look URL-shaped. Some browsers (e.g. DuckDuckGo on newer
+        // builds) surface the URL in a plain TextView once the user leaves
+        // the address bar.
         return findUrlInChildren(node)
     }
 
+    /** Cheap heuristic — we do this both so the view-ID matcher ignores
+     *  "placeholder" text like "Search or type URL" and so the subtree
+     *  fallback doesn't mistake a page title for a URL. */
+    private fun looksLikeUrl(text: String): Boolean {
+        if (text.isBlank() || text.length < 4) return false
+        if (text.contains(' ')) return false
+        // Either has a scheme, or a dot with no whitespace (e.g. "example.com/foo")
+        if (text.startsWith("http://") || text.startsWith("https://")) return true
+        return text.contains('.')
+    }
+
     private fun findUrlInChildren(node: AccessibilityNodeInfo): String {
-        if (node.className?.toString() == "android.widget.EditText") {
+        val cls = node.className?.toString() ?: ""
+        if (cls == "android.widget.EditText" || cls == "android.widget.TextView") {
             val text = node.text?.toString() ?: ""
-            if (text.contains(".") && !text.contains(" ") && text.length > 3) {
-                return text
-            }
+            if (looksLikeUrl(text)) return text
         }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue

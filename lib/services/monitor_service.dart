@@ -424,10 +424,14 @@ class MonitorService extends ChangeNotifier {
         if (limit.hasActiveExtension) continue;
 
         final minutesUsed = (raw[limit.packageName] as num?)?.toInt() ?? 0;
-        final effectiveDailyLimit =
-            limit.dailyLimitMinutes + limit.temporaryExtensionMinutes;
+        // NOTE: temporaryExtensionMinutes is intentionally NOT added here.
+        // The `hasActiveExtension` short-circuit above already allows the
+        // child to keep using the app during the granted window. Adding
+        // the bump on top would also persist past expiration (and
+        // historically accumulated across approvals via a FieldValue.increment
+        // bug), permanently inflating the daily limit.
         final shouldBlock = limit.isBlocked ||
-            (limit.dailyLimitMinutes > 0 && minutesUsed >= effectiveDailyLimit);
+            (limit.dailyLimitMinutes > 0 && minutesUsed >= limit.dailyLimitMinutes);
 
         if (shouldBlock && currentPkg == limit.packageName) {
           // Differentiate "parent hard-blocked this app" from "daily time limit
@@ -482,12 +486,18 @@ class MonitorService extends ChangeNotifier {
           .toList();
 
       final newEntries = parsed.whereType<Map>().map((e) {
-        final url = e['url'] as String? ?? '';
+        final rawUrl = e['url'] as String? ?? '';
+        // Chrome's URL bar often shows "example.com/page" with no scheme.
+        // Dart's Uri.parse treats that as a path, so .host is empty. Prepend
+        // https:// when the string has no scheme so searchQuery/host work.
+        final url = (rawUrl.startsWith('http://') || rawUrl.startsWith('https://'))
+            ? rawUrl
+            : 'https://$rawUrl';
         final tsMillis = (e['timestamp'] as num?)?.toInt() ?? 0;
         // Derive a human title from the URL. For search URLs (Google, Bing,
         // DuckDuckGo, YouTube, etc.) we surface the search query itself so
         // the parent sees "cats funny videos" instead of just "google.com".
-        String title = url;
+        String title = rawUrl;
         String? searchQuery;
         try {
           final uri = Uri.parse(url);
