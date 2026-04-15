@@ -8,10 +8,12 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.view.KeyEvent
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
@@ -224,11 +226,29 @@ class MainActivity : FlutterActivity() {
                             ?: AppBlockedActivity.REASON_LIMIT_REACHED
                         val allowTimeRequests = call.argument<Boolean>("allowTimeRequests") ?: true
                         try {
-                            // Press HOME first so the offending app (e.g.
-                            // YouTube) actually pauses its playback —
-                            // otherwise simply drawing the block activity
-                            // over YouTube lets the audio keep running in
-                            // the background.
+                            // Force-pause any media (YouTube, Spotify, etc.)
+                            // BEFORE we press HOME. HOME alone doesn't stop
+                            // audio-playing apps that hold MediaSession focus —
+                            // many keep playing in the background. Dispatching
+                            // a MEDIA_PAUSE key event to AudioManager delivers
+                            // the pause through the system media-session
+                            // pipeline, which the active media owner honors.
+                            try {
+                                val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                                am.dispatchMediaKeyEvent(
+                                    KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE)
+                                )
+                                am.dispatchMediaKeyEvent(
+                                    KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE)
+                                )
+                            } catch (e: Exception) {
+                                Log.w("MainActivity", "media pause dispatch failed: ${e.message}")
+                            }
+
+                            // Press HOME so the offending app actually leaves
+                            // the foreground — otherwise simply drawing the
+                            // block activity over it doesn't trigger onPause
+                            // in the blocked app.
                             val homePressed = BrowserMonitorService.performHomeAction()
                             if (!homePressed) {
                                 // Fallback: fire a real HOME intent if the

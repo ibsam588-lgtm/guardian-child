@@ -171,9 +171,17 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         backgroundColor: Colors.transparent,
         foregroundColor: Theme.of(context).colorScheme.onSurface,
       ),
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          // Pad for the system gesture/nav bar — without this the
+          // "Continue" button sits under the bar on phones with on-screen
+          // navigation and can't be tapped cleanly.
+          padding: EdgeInsets.fromLTRB(
+            0, 0, 0,
+            MediaQuery.of(context).viewPadding.bottom + 16,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -281,6 +289,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                 ),
               ),
             ],
+          ),
           ),
         ),
       ),
