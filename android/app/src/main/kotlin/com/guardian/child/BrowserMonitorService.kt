@@ -1,11 +1,14 @@
 package com.guardian.child
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.FirebaseFirestore
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -114,11 +117,28 @@ class BrowserMonitorService : AccessibilityService() {
 
     private var prefs: SharedPreferences? = null
 
+    // ── Diagnostics ────────────────────────────────────────────────────────
+    // We write a status doc to children/{childId}/browser_history/status so
+    // the parent can tell the difference between:
+    //   (a) service not running at all (no doc)
+    //   (b) service running but no browser events arriving (eventsSeen == 0)
+    //   (c) events arriving but URL extraction failing (eventsSeen > 0, urlsCaptured == 0)
+    //   (d) everything working (urlsCaptured > 0)
+    private var eventsSeen: Long = 0
+    private var urlsCaptured: Long = 0
+    private var lastBrowserPkg: String = ""
+    private var lastEventTs: Long = 0
+    private var lastExtractSample: String = ""
+    private var lastStatusWriteTs: Long = 0
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         prefs = getSharedPreferences("browser_monitor", MODE_PRIVATE)
         Log.d(TAG, "BrowserMonitorService connected")
+        // Emit an initial "connected" status so the parent UI immediately
+        // sees the service is up, even before the child opens a browser.
+        writeDiagnosticStatus(force = true, note = "connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -129,13 +149,31 @@ class BrowserMonitorService : AccessibilityService() {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
+        eventsSeen += 1
+        lastBrowserPkg = packageName
+        lastEventTs = System.currentTimeMillis()
+
         try {
-            val rootNode = rootInActiveWindow ?: return
+            val rootNode = rootInActiveWindow
+            if (rootNode == null) {
+                writeDiagnosticStatus(note = "rootInActiveWindow=null")
+                return
+            }
             val url = extractUrl(rootNode)
+            if (url.isEmpty()) {
+                // Sample first EditText text we can find so the parent can tell
+                // whether the URL bar is just showing placeholder text vs. the
+                // extraction not finding the node at all.
+                lastExtractSample = sampleAnyEditText(rootNode)
+            }
             rootNode.recycle()
 
-            if (url.isEmpty() || url == lastUrl) return
+            if (url.isEmpty() || url == lastUrl) {
+                writeDiagnosticStatus()
+                return
+            }
             lastUrl = url
+            urlsCaptured += 1
 
             val entry = mapOf<String, Any>(
                 "url"         to url,
@@ -158,9 +196,63 @@ class BrowserMonitorService : AccessibilityService() {
                 ?.apply()
 
             Log.d(TAG, "Browser URL: $url from $packageName")
+            writeDiagnosticStatus(force = true)
         } catch (e: Exception) {
             Log.e(TAG, "Error reading browser URL", e)
+            writeDiagnosticStatus(note = "err:${e.javaClass.simpleName}")
         }
+    }
+
+    /** Throttled Firestore write of diagnostic counters. Force=true bypasses
+     *  the throttle (used on meaningful state changes — connected, URL captured). */
+    private fun writeDiagnosticStatus(force: Boolean = false, note: String? = null) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastStatusWriteTs < 10_000L) return
+        lastStatusWriteTs = now
+
+        val childId = try {
+            val sp = applicationContext.getSharedPreferences(
+                "FlutterSharedPreferences", Context.MODE_PRIVATE)
+            sp.getString("flutter.paired_child_id", null)
+        } catch (e: Exception) { null } ?: return
+        if (childId.isBlank()) return
+
+        try {
+            val data = hashMapOf<String, Any>(
+                "eventsSeen"      to eventsSeen,
+                "urlsCaptured"    to urlsCaptured,
+                "lastBrowserPkg"  to lastBrowserPkg,
+                "lastEventTs"     to lastEventTs,
+                "lastExtractSample" to lastExtractSample,
+                "updatedAt"       to Timestamp.now(),
+            )
+            if (note != null) data["note"] = note
+            FirebaseFirestore.getInstance()
+                .collection("children")
+                .document(childId)
+                .collection("browser_history")
+                .document("status")
+                .set(data)
+        } catch (e: Exception) {
+            Log.w(TAG, "writeDiagnosticStatus failed: ${e.message}")
+        }
+    }
+
+    /** Returns the first URL-shaped or non-empty EditText text we find in the
+     *  subtree, for diagnostics only. Trimmed to 80 chars. */
+    private fun sampleAnyEditText(node: AccessibilityNodeInfo): String {
+        val cls = node.className?.toString() ?: ""
+        if (cls == "android.widget.EditText") {
+            val t = node.text?.toString() ?: ""
+            if (t.isNotEmpty()) return t.take(80)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val r = sampleAnyEditText(child)
+            child.recycle()
+            if (r.isNotEmpty()) return r
+        }
+        return ""
     }
 
     private fun extractUrl(node: AccessibilityNodeInfo): String {
@@ -174,9 +266,14 @@ class BrowserMonitorService : AccessibilityService() {
             "com.android.chrome:id/location_bar",
             "com.android.chrome:id/omnibox_text",
             "com.android.chrome:id/search_box_text",
+            "com.android.chrome:id/toolbar_url",
+            "com.android.chrome:id/omnibox_container",
             "com.chrome.beta:id/url_bar",
+            "com.chrome.beta:id/location_bar",
             "com.chrome.dev:id/url_bar",
+            "com.chrome.dev:id/location_bar",
             "com.chrome.canary:id/url_bar",
+            "com.chrome.canary:id/location_bar",
             // Firefox (Fenix / legacy)
             "org.mozilla.firefox:id/url_bar_title",
             "org.mozilla.firefox:id/mozac_browser_toolbar_url_view",
@@ -201,9 +298,19 @@ class BrowserMonitorService : AccessibilityService() {
         for (id in urlBarIds) {
             val nodes = node.findAccessibilityNodeInfosByViewId(id)
             if (!nodes.isNullOrEmpty()) {
-                val text = nodes[0].text?.toString() ?: ""
+                val n = nodes[0]
+                val text = n.text?.toString() ?: ""
+                // Newer Chrome surfaces the URL via contentDescription
+                // ("Address bar, https://example.com") when the omnibox has
+                // collapsed to a pill. Fall back to that when `text` is blank
+                // or is placeholder text like "Search or type web address".
+                val desc = n.contentDescription?.toString() ?: ""
                 nodes.forEach { it.recycle() }
                 if (text.isNotEmpty() && looksLikeUrl(text)) return text
+                if (desc.isNotEmpty()) {
+                    val extracted = extractUrlFromDescription(desc)
+                    if (extracted.isNotEmpty()) return extracted
+                }
             }
         }
 
@@ -212,6 +319,18 @@ class BrowserMonitorService : AccessibilityService() {
         // builds) surface the URL in a plain TextView once the user leaves
         // the address bar.
         return findUrlInChildren(node)
+    }
+
+    /** Chrome/Edge/Brave often set contentDescription like
+     *  "Address bar, https://example.com" or "example.com, Verified". Pull
+     *  the first URL-shaped token out of that string. */
+    private fun extractUrlFromDescription(desc: String): String {
+        // Split on common separators and take the first looks-like-a-url token
+        for (part in desc.split(',', ' ', '\n')) {
+            val p = part.trim()
+            if (p.isNotEmpty() && looksLikeUrl(p)) return p
+        }
+        return ""
     }
 
     /** Cheap heuristic — we do this both so the view-ID matcher ignores
@@ -230,6 +349,11 @@ class BrowserMonitorService : AccessibilityService() {
         if (cls == "android.widget.EditText" || cls == "android.widget.TextView") {
             val text = node.text?.toString() ?: ""
             if (looksLikeUrl(text)) return text
+            val desc = node.contentDescription?.toString() ?: ""
+            if (desc.isNotEmpty()) {
+                val extracted = extractUrlFromDescription(desc)
+                if (extracted.isNotEmpty()) return extracted
+            }
         }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
