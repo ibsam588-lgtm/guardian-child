@@ -59,6 +59,11 @@ dependencies {
     // firebase_messaging plugin brings this in transitively at runtime;
     // declaring it here makes it available on the Kotlin compile classpath.
     implementation 'com.google.firebase:firebase-messaging:24.0.1'
+    // Required so ListenService can upload base64 audio chunks directly
+    // from native Kotlin to Firestore.  Flutter's cloud_firestore plugin
+    // brings this in at runtime, but we need it on the compile classpath
+    // so `FirebaseFirestore` and `Timestamp` resolve during :app compileKotlin.
+    implementation 'com.google.firebase:firebase-firestore:25.1.0'
 }
 
 flutter { source '../..' }
