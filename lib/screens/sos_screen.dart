@@ -46,6 +46,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
     final parentUid = pairing.parentUid;
 
     if (childId == null || parentUid == null) {
+      if (!mounted) return;
       setState(() { _sending = false; _error = 'Not paired yet.'; });
       return;
     }
@@ -109,16 +110,22 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
             .invokeMethod('playSiren');
       } catch (_) {/* ignore — siren is optional */}
 
+      if (!mounted) return;
       setState(() { _sending = false; _sent = true; });
 
       // Auto-cancel SOS active flag after 30 seconds (parent will have seen it).
+      // Capture childId into a local so the callback never dereferences a
+      // freshly-unpaired (null) childId via `pairing.childId`.
+      final lockedChildId = childId;
       _autoResetTimer = Timer(const Duration(seconds: 30), () {
+        if (lockedChildId.isEmpty) return;
         unawaited(FirebaseFirestore.instance
             .collection('children')
-            .doc(childId)
+            .doc(lockedChildId)
             .set({'sosActive': false}, SetOptions(merge: true)));
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _sending = false;
         _error = 'Could not send SOS. Check your internet and try again.';

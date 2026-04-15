@@ -16,6 +16,12 @@ class CommandService {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _docCommandsSubscription;
 
+  /// Timestamp (local) at which [start] was last called. Used to skip
+  /// historical command docs that would otherwise be replayed on every
+  /// app restart — Firestore delivers every existing document as a
+  /// `DocumentChangeType.added` event on the first snapshot.
+  DateTime? _startedAt;
+
   /// Called when the parent sends an unpair command (e.g., after deleteChild()).
   /// The registered handler should stop MonitorService and call PairingService.unpair().
   VoidCallback? onUnpairRequested;
@@ -24,6 +30,7 @@ class CommandService {
   void start(String childId) {
     _subscription?.cancel();
     _docCommandsSubscription?.cancel();
+    _startedAt = DateTime.now();
 
     // Listen to top-level child_commands (siren, siren_stop)
     _subscription = _db
@@ -66,10 +73,24 @@ class CommandService {
   }
 
   void _handleDocCommands(QuerySnapshot<Map<String, dynamic>> snapshot) {
+    final started = _startedAt;
     for (final change in snapshot.docChanges) {
       if (change.type != DocumentChangeType.added) continue;
       final data = change.doc.data();
       if (data == null) continue;
+
+      // Skip historical command docs: Firestore delivers every existing
+      // document as an `added` event on the initial snapshot, which would
+      // replay every siren / SOS / sync command the parent ever sent on
+      // each app restart. Only honour commands written AFTER we started
+      // listening (plus a small 30-second grace window for clock skew).
+      final ts = data['timestamp'];
+      if (ts is Timestamp && started != null) {
+        if (ts.toDate().isBefore(started.subtract(const Duration(seconds: 30)))) {
+          continue;
+        }
+      }
+
       // The parent app writes either {'command': 'unpair'} or
       // {'action': 'siren' | 'siren_stop' | 'unpair'} depending on the call site.
       // Support both field names so every command is honoured.

@@ -449,12 +449,26 @@ class MonitorService extends ChangeNotifier {
           .toList();
 
       final newEntries = parsed.whereType<Map>().map((e) {
-        final ts = DateTime.fromMillisecondsSinceEpoch(
-            (e['timestamp'] as num?)?.toInt() ?? 0);
+        final url = e['url'] as String? ?? '';
+        final tsMillis = (e['timestamp'] as num?)?.toInt() ?? 0;
+        // Derive a human title from the URL host (parent UI shows
+        // `title` above the domain; falling back to "Untitled" when
+        // absent looks broken to the user).
+        String title = url;
+        try {
+          final host = Uri.parse(url).host;
+          if (host.isNotEmpty) title = host.replaceFirst(RegExp(r'^www\.'), '');
+        } catch (_) {/* keep url as title */}
         return <String, dynamic>{
-          'url':       e['url']     as String? ?? '',
+          'url':       url,
+          'title':     title,
           'browser':   e['browser'] as String? ?? 'browser',
-          'visitedAt': Timestamp.fromDate(ts),
+          // Parent app reads `date` as epoch millis for the time label.
+          // Keep `visitedAt` as a Firestore Timestamp for any future
+          // server-side query support.
+          'date':      tsMillis,
+          'visitedAt': Timestamp.fromDate(
+              DateTime.fromMillisecondsSinceEpoch(tsMillis)),
         };
       }).toList();
 
