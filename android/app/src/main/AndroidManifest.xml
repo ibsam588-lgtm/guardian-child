@@ -25,6 +25,14 @@
          microphone foreground-service subtype. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Block-screen popup. Full-screen-intent notifications are the only
+         reliable way to bring an activity to the foreground from a
+         background timer on API 29+, which is what the block screen relies on
+         when the child is already inside YouTube/etc. SYSTEM_ALERT_WINDOW
+         is listed as a belt-and-suspenders fallback for devices where the
+         full-screen intent is downgraded to a heads-up notification. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Restart after reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 

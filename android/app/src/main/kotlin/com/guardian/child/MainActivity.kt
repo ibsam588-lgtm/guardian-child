@@ -227,13 +227,9 @@ class MainActivity : FlutterActivity() {
                             ?: AppBlockedActivity.REASON_LIMIT_REACHED
                         val allowTimeRequests = call.argument<Boolean>("allowTimeRequests") ?: true
                         try {
-                            // Force-pause any media (YouTube, Spotify, etc.)
-                            // BEFORE we press HOME. HOME alone doesn't stop
-                            // audio-playing apps that hold MediaSession focus —
-                            // many keep playing in the background. Dispatching
-                            // a MEDIA_PAUSE key event to AudioManager delivers
-                            // the pause through the system media-session
-                            // pipeline, which the active media owner honors.
+                            // Pause any playing media (YouTube, Spotify, etc.) so
+                            // the child isn't left with audio in the background
+                            // while the block screen takes over.
                             try {
                                 val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                                 am.dispatchMediaKeyEvent(
@@ -246,32 +242,26 @@ class MainActivity : FlutterActivity() {
                                 Log.w("MainActivity", "media pause dispatch failed: ${e.message}")
                             }
 
-                            // Press HOME so the offending app actually leaves
-                            // the foreground — otherwise simply drawing the
-                            // block activity over it doesn't trigger onPause
-                            // in the blocked app.
-                            val homePressed = BrowserMonitorService.performHomeAction()
-                            if (!homePressed) {
-                                // Fallback: fire a real HOME intent if the
-                                // accessibility service isn't running.
-                                val home = Intent(Intent.ACTION_MAIN).apply {
-                                    addCategory(Intent.CATEGORY_HOME)
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                startActivity(home)
-                            }
-                            val intent = Intent(this, AppBlockedActivity::class.java).apply {
-                                putExtra(AppBlockedActivity.EXTRA_PACKAGE_NAME, packageName)
-                                putExtra(AppBlockedActivity.EXTRA_APP_NAME, appName)
-                                putExtra(AppBlockedActivity.EXTRA_REASON, reason)
-                                putExtra(AppBlockedActivity.EXTRA_ALLOW_TIME_REQUESTS, allowTimeRequests)
-                                addFlags(
-                                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                    Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                )
-                            }
-                            startActivity(intent)
+                            // CRITICAL: do NOT press HOME here. On API 29+
+                            // Android forbids background activity launches
+                            // from a backgrounded app, so pressing HOME first
+                            // (which sends us to background) made the block
+                            // activity never appear — the child just saw
+                            // YouTube close with nothing in its place.
+                            //
+                            // Instead, call `AppBlockedActivity.launchOver()`
+                            // which tries the in-app activity-start and,
+                            // if the OS swallows it, falls back to posting a
+                            // full-screen-intent notification that Android
+                            // itself brings to the foreground. Either way
+                            // the child sees the "App Blocked" UI.
+                            AppBlockedActivity.launchOver(
+                                context = this,
+                                blockedPackage = packageName,
+                                appName = appName,
+                                reason = reason,
+                                allowTimeRequests = allowTimeRequests,
+                            )
                             result.success(null)
                         } catch (e: Exception) {
                             result.error("BLOCK_SCREEN_ERROR", e.message, null)

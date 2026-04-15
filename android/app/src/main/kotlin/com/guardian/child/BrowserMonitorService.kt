@@ -1,6 +1,7 @@
 package com.guardian.child
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.content.SharedPreferences
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -86,6 +87,26 @@ class BrowserMonitorService : AccessibilityService() {
                 svc.performGlobalAction(GLOBAL_ACTION_HOME)
             } catch (e: Exception) {
                 Log.e(TAG, "performHomeAction error", e)
+                false
+            }
+        }
+
+        /**
+         * Start an activity via the accessibility service's context.
+         * Accessibility services are exempt from the API 29+ background
+         * activity-launch restriction, so this is the reliable way to bring
+         * `AppBlockedActivity` to the foreground while the child is inside
+         * a blocked app. Returns true on success, false if the service
+         * isn't currently connected or the start fails (caller should
+         * fall back to a full-screen-intent notification).
+         */
+        fun startActivitySafely(intent: Intent): Boolean {
+            val svc = instance ?: return false
+            return try {
+                svc.startActivity(intent)
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "startActivitySafely failed: ${e.message}")
                 false
             }
         }
