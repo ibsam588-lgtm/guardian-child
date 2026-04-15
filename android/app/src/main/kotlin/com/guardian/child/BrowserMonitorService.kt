@@ -21,6 +21,12 @@ class BrowserMonitorService : AccessibilityService() {
     companion object {
         private const val TAG = "BrowserMonitor"
 
+        /** Live instance, used by [performHomeAction] so callers outside
+         *  the service (MainActivity, MonitorService) can trigger the
+         *  system HOME action without holding a context-bound reference. */
+        @Volatile
+        private var instance: BrowserMonitorService? = null
+
         private val BROWSER_PACKAGES = setOf(
             "com.android.chrome",
             "com.chrome.beta",
@@ -64,12 +70,32 @@ class BrowserMonitorService : AccessibilityService() {
             }
             return arr.toString()
         }
+
+        /**
+         * Presses the system HOME button via the accessibility framework.
+         * This is used before launching the block screen so background media
+         * (e.g. YouTube, Spotify) actually pauses instead of continuing to
+         * play audio while the overlay is visible.
+         *
+         * Returns true if the action was dispatched, false if the
+         * accessibility service isn't currently running.
+         */
+        fun performHomeAction(): Boolean {
+            val svc = instance ?: return false
+            return try {
+                svc.performGlobalAction(GLOBAL_ACTION_HOME)
+            } catch (e: Exception) {
+                Log.e(TAG, "performHomeAction error", e)
+                false
+            }
+        }
     }
 
     private var prefs: SharedPreferences? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         prefs = getSharedPreferences("browser_monitor", MODE_PRIVATE)
         Log.d(TAG, "BrowserMonitorService connected")
     }
@@ -164,6 +190,7 @@ class BrowserMonitorService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (instance === this) instance = null
         Log.d(TAG, "BrowserMonitorService destroyed")
     }
 }

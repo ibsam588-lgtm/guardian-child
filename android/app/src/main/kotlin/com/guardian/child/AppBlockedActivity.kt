@@ -45,12 +45,12 @@ class AppBlockedActivity : Activity() {
             REASON_BLOCKED -> Triple(
                 "App Blocked",
                 "$appName has been blocked by your parent.",
-                "Ask Parent for Permission"
+                "Request Unblock"
             )
             else -> Triple(
                 "App Limit Reached",
                 "You've used all your time for $appName today.",
-                "Ask Parent for More Time"
+                "Request More Time"
             )
         }
 

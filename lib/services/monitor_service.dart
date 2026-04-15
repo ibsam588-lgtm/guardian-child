@@ -15,6 +15,12 @@ class AppLimitInfo {
   final bool isEnabled;
   final bool isBlocked;
   final bool allowTimeRequests;
+  /// Extra minutes the parent has granted via a time request. Added on top
+  /// of the daily limit for usage comparisons.
+  final int temporaryExtensionMinutes;
+  /// Expiry of any active extension. While this is in the future the child
+  /// enforcement loop treats the app as allowed (overrides isBlocked too).
+  final DateTime? extensionExpiresAt;
 
   AppLimitInfo({
     required this.packageName,
@@ -23,7 +29,15 @@ class AppLimitInfo {
     required this.isEnabled,
     required this.isBlocked,
     required this.allowTimeRequests,
+    this.temporaryExtensionMinutes = 0,
+    this.extensionExpiresAt,
   });
+
+  /// True if a parent-granted extension is currently active.
+  bool get hasActiveExtension {
+    final exp = extensionExpiresAt;
+    return exp != null && exp.isAfter(DateTime.now());
+  }
 
   factory AppLimitInfo.fromMap(Map<String, dynamic> d) {
     final dailyLimit = d['dailyLimitMinutes'] as int? ?? 60;
@@ -31,6 +45,7 @@ class AppLimitInfo {
     // Prefer the explicit 'isBlocked' field written by the parent app;
     // fall back to the implicit rule: enabled with a zero-minute daily limit.
     final isBlocked = d['isBlocked'] as bool? ?? (isEnabled && dailyLimit == 0);
+    final extTs = d['extensionExpiresAt'];
     return AppLimitInfo(
       packageName: d['packageName'] as String? ?? '',
       appName: d['appName'] as String? ?? '',
@@ -38,6 +53,9 @@ class AppLimitInfo {
       isEnabled: isEnabled,
       isBlocked: isBlocked,
       allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
+      temporaryExtensionMinutes:
+          (d['temporaryExtensionMinutes'] as num?)?.toInt() ?? 0,
+      extensionExpiresAt: extTs is Timestamp ? extTs.toDate() : null,
     );
   }
 }
@@ -400,9 +418,16 @@ class MonitorService extends ChangeNotifier {
 
       for (final limit in _appLimits) {
         if (!limit.isEnabled) continue;
+        // A parent-approved request grants a TEMPORARY extension. While it's
+        // active, skip enforcement entirely — this is what makes approvals
+        // time-limited while keeping permanent blocks permanent.
+        if (limit.hasActiveExtension) continue;
+
         final minutesUsed = (raw[limit.packageName] as num?)?.toInt() ?? 0;
+        final effectiveDailyLimit =
+            limit.dailyLimitMinutes + limit.temporaryExtensionMinutes;
         final shouldBlock = limit.isBlocked ||
-            (limit.dailyLimitMinutes > 0 && minutesUsed >= limit.dailyLimitMinutes);
+            (limit.dailyLimitMinutes > 0 && minutesUsed >= effectiveDailyLimit);
 
         if (shouldBlock && currentPkg == limit.packageName) {
           // Differentiate "parent hard-blocked this app" from "daily time limit
@@ -459,18 +484,29 @@ class MonitorService extends ChangeNotifier {
       final newEntries = parsed.whereType<Map>().map((e) {
         final url = e['url'] as String? ?? '';
         final tsMillis = (e['timestamp'] as num?)?.toInt() ?? 0;
-        // Derive a human title from the URL host (parent UI shows
-        // `title` above the domain; falling back to "Untitled" when
-        // absent looks broken to the user).
+        // Derive a human title from the URL. For search URLs (Google, Bing,
+        // DuckDuckGo, YouTube, etc.) we surface the search query itself so
+        // the parent sees "cats funny videos" instead of just "google.com".
         String title = url;
+        String? searchQuery;
         try {
-          final host = Uri.parse(url).host;
-          if (host.isNotEmpty) title = host.replaceFirst(RegExp(r'^www\.'), '');
+          final uri = Uri.parse(url);
+          searchQuery = _extractSearchQuery(uri);
+          if (searchQuery != null && searchQuery.isNotEmpty) {
+            title = searchQuery;
+          } else {
+            final host = uri.host;
+            if (host.isNotEmpty) {
+              title = host.replaceFirst(RegExp(r'^www\.'), '');
+            }
+          }
         } catch (_) {/* keep url as title */}
         return <String, dynamic>{
           'url':       url,
           'title':     title,
           'browser':   e['browser'] as String? ?? 'browser',
+          if (searchQuery != null && searchQuery.isNotEmpty)
+            'searchQuery': searchQuery,
           // Parent app reads `date` as epoch millis for the time label.
           // Keep `visitedAt` as a Firestore Timestamp for any future
           // server-side query support.
@@ -498,6 +534,33 @@ class MonitorService extends ChangeNotifier {
     } catch (e) {
       debugPrint('BrowserSync error: $e');
     }
+  }
+
+  /// Pulls the user's search terms out of a search-engine URL.
+  /// Returns null for URLs that aren't recognisable searches.
+  String? _extractSearchQuery(Uri uri) {
+    final host = uri.host.toLowerCase();
+    // Different search engines use different query-parameter names.
+    String? param;
+    if (host.contains('google.') ||
+        host.contains('bing.com') ||
+        host.contains('yahoo.com') ||
+        host.contains('youtube.com') ||
+        host.contains('m.youtube.com')) {
+      param = 'q';
+    } else if (host.contains('duckduckgo.com')) {
+      param = 'q';
+    } else if (host.contains('yandex.')) {
+      param = 'text';
+    } else if (host.contains('baidu.com')) {
+      param = 'wd';
+    } else if (host.contains('search.brave.com')) {
+      param = 'q';
+    }
+    if (param == null) return null;
+    final raw = uri.queryParameters[param];
+    if (raw == null || raw.trim().isEmpty) return null;
+    return raw;
   }
 
   String _prettifyPackageName(String pkg) {
@@ -795,12 +858,12 @@ class MonitorService extends ChangeNotifier {
       unawaited(_db.collection('alerts').add({
         'childId': childId,
         'parentUid': parentUid,
-        'type': isPermission ? 'permission_request' : 'time_request',
+        'type': isPermission ? 'unblock_request' : 'time_request',
         'title': isPermission
-            ? '$childName is asking for permission'
+            ? '$childName is requesting an unblock'
             : '$childName is asking for more time',
         'subtitle': isPermission
-            ? 'Wants to use $appName (blocked).'
+            ? 'Wants to use $appName for $requestedMinutes min.'
             : 'Wants $requestedMinutes more min on $appName.',
         'requestId': ref.id,
         'packageName': packageName,

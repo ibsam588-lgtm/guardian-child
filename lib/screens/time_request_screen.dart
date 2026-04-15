@@ -106,7 +106,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
           icon: const Icon(Icons.arrow_back_ios_rounded),
           onPressed: () => context.go('/home'),
         ),
-        title: Text(widget._isPermission ? 'Ask for Permission' : 'Ask for More Time'),
+        title: Text(widget._isPermission ? 'Request Unblock' : 'Request More Time'),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -144,7 +144,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
                 children: [
                   Text(
                     widget._isPermission
-                        ? 'Requesting permission for'
+                        ? 'Requesting unblock for'
                         : 'Requesting more time for',
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
@@ -240,7 +240,9 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
             child: _sending
                 ? const SizedBox(width: 22, height: 22,
                     child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white))
-                : const Text('Send Request to Parent'),
+                : Text(widget._isPermission
+                    ? 'Send Unblock Request'
+                    : 'Send $_selectedMinutes min Request'),
           ),
         ),
       ],
@@ -253,12 +255,15 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
     String statusTitle;
     String statusMsg;
 
+    final isPerm = widget._isPermission;
     switch (_status) {
       case 'approved':
         statusColor = AppTheme.accent;
         statusIcon = Icons.check_circle_rounded;
-        statusTitle = 'Request Approved!';
-        statusMsg = 'Your parent said yes. Enjoy your extra time!';
+        statusTitle = isPerm ? 'Unblocked!' : 'Request Approved!';
+        statusMsg = isPerm
+            ? 'Your parent unblocked ${widget.appName} for $_selectedMinutes min.'
+            : 'Your parent said yes. Enjoy your extra time!';
         break;
       case 'denied':
         statusColor = AppTheme.secondary;
@@ -269,7 +274,9 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
       default:
         statusColor = AppTheme.warning;
         statusIcon = Icons.hourglass_top_rounded;
-        statusTitle = 'Waiting for Parent...';
+        statusTitle = isPerm
+            ? 'Unblock Request Sent'
+            : 'Request Sent';
         statusMsg = 'Your parent will see your request and respond soon.';
     }
 

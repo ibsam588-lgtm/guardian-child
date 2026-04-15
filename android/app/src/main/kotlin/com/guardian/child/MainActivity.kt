@@ -224,12 +224,31 @@ class MainActivity : FlutterActivity() {
                             ?: AppBlockedActivity.REASON_LIMIT_REACHED
                         val allowTimeRequests = call.argument<Boolean>("allowTimeRequests") ?: true
                         try {
+                            // Press HOME first so the offending app (e.g.
+                            // YouTube) actually pauses its playback —
+                            // otherwise simply drawing the block activity
+                            // over YouTube lets the audio keep running in
+                            // the background.
+                            val homePressed = BrowserMonitorService.performHomeAction()
+                            if (!homePressed) {
+                                // Fallback: fire a real HOME intent if the
+                                // accessibility service isn't running.
+                                val home = Intent(Intent.ACTION_MAIN).apply {
+                                    addCategory(Intent.CATEGORY_HOME)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                startActivity(home)
+                            }
                             val intent = Intent(this, AppBlockedActivity::class.java).apply {
                                 putExtra(AppBlockedActivity.EXTRA_PACKAGE_NAME, packageName)
                                 putExtra(AppBlockedActivity.EXTRA_APP_NAME, appName)
                                 putExtra(AppBlockedActivity.EXTRA_REASON, reason)
                                 putExtra(AppBlockedActivity.EXTRA_ALLOW_TIME_REQUESTS, allowTimeRequests)
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                    Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                )
                             }
                             startActivity(intent)
                             result.success(null)
