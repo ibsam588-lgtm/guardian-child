@@ -70,10 +70,23 @@ class CommandService {
       if (change.type != DocumentChangeType.added) continue;
       final data = change.doc.data();
       if (data == null) continue;
-      final command = data['command'] as String? ?? '';
-      if (command == 'unpair') {
-        debugPrint('CommandService: received unpair from doc commands');
-        onUnpairRequested?.call();
+      // The parent app writes either {'command': 'unpair'} or
+      // {'action': 'siren' | 'siren_stop' | 'unpair'} depending on the call site.
+      // Support both field names so every command is honoured.
+      final command = (data['command'] as String?) ?? (data['action'] as String?) ?? '';
+      switch (command) {
+        case 'siren':
+          debugPrint('CommandService: siren command received');
+          _playSiren();
+          break;
+        case 'siren_stop':
+          debugPrint('CommandService: siren_stop command received');
+          _stopSiren();
+          break;
+        case 'unpair':
+          debugPrint('CommandService: received unpair from doc commands');
+          onUnpairRequested?.call();
+          break;
       }
     }
   }

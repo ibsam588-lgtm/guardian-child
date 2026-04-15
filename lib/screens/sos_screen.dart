@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -49,25 +50,32 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       return;
     }
 
+    // Best-effort location lookup — never block the SOS alert on it.
+    double? lat, lng;
     try {
-      double? lat, lng;
-
-      // Try getting location
       final permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.always || permission == LocationPermission.whileInUse) {
+      if (permission == LocationPermission.always ||
+          permission == LocationPermission.whileInUse) {
         final pos = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-        ).timeout(const Duration(seconds: 10));
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 5),
+          ),
+        ).timeout(const Duration(seconds: 6));
         lat = pos.latitude;
         lng = pos.longitude;
       }
+    } catch (_) {
+      // Location failure is non-fatal — send the SOS without coordinates.
+    }
 
-      // Write SOS alert to Firestore
+    try {
+      // Write SOS alert to Firestore (primary channel for parent notification).
       await FirebaseFirestore.instance.collection('alerts').add({
         'childId': childId,
         'parentUid': parentUid,
         'type': 'sos',
-        'title': '🚨 SOS Alert',
+        'title': 'SOS Alert',
         'subtitle': '${pairing.childName ?? 'Your child'} needs help!',
         'lat': lat,
         'lng': lng,
@@ -75,22 +83,46 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
         'isRead': false,
       });
 
-      // Also update child doc so parent sees it on dashboard
+      // Also update child doc so parent sees the SOS banner on dashboard.
       await FirebaseFirestore.instance.collection('children').doc(childId).set({
         'sosActive': true,
         'sosAt': FieldValue.serverTimestamp(),
+        if (lat != null) 'lastLat': lat,
+        if (lng != null) 'lastLng': lng,
       }, SetOptions(merge: true));
+
+      // Also write an SOS command so any legacy listener picks it up.
+      unawaited(FirebaseFirestore.instance
+          .collection('children')
+          .doc(childId)
+          .collection('commands')
+          .add({
+        'action': 'sos',
+        'parentUid': parentUid,
+        'timestamp': FieldValue.serverTimestamp(),
+      }));
+
+      // Play the local siren on the child device so it's audible to people
+      // nearby. Best effort — do not fail the SOS if this throws.
+      try {
+        await const MethodChannel('com.guardian.child/monitor')
+            .invokeMethod('playSiren');
+      } catch (_) {/* ignore — siren is optional */}
 
       setState(() { _sending = false; _sent = true; });
 
-      // Auto-cancel SOS after 30 seconds (parent will have seen it)
+      // Auto-cancel SOS active flag after 30 seconds (parent will have seen it).
       _autoResetTimer = Timer(const Duration(seconds: 30), () {
-        unawaited(FirebaseFirestore.instance.collection('children').doc(childId).set({
-          'sosActive': false,
-        }, SetOptions(merge: true)));
+        unawaited(FirebaseFirestore.instance
+            .collection('children')
+            .doc(childId)
+            .set({'sosActive': false}, SetOptions(merge: true)));
       });
     } catch (e) {
-      setState(() { _sending = false; _error = 'Could not send SOS. Try again.'; });
+      setState(() {
+        _sending = false;
+        _error = 'Could not send SOS. Check your internet and try again.';
+      });
     }
   }
 
@@ -231,7 +263,14 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
         ),
         const SizedBox(height: 48),
         ElevatedButton(
-          onPressed: () => context.go('/home'),
+          onPressed: () async {
+            // Stop the local siren when the child acknowledges they're safe.
+            try {
+              await const MethodChannel('com.guardian.child/monitor')
+                  .invokeMethod('stopSiren');
+            } catch (_) {/* ignore */}
+            if (context.mounted) context.go('/home');
+          },
           style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accent),
           child: const Text("I'm OK — Go Back"),
         ),

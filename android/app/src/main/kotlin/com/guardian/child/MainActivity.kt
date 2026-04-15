@@ -227,13 +227,37 @@ class MainActivity : FlutterActivity() {
 
     // ── Installed apps ────────────────────────────────────────────────────────
 
-    /** Returns a list of installed apps with package name, app name, and system flag. */
+    /** Returns a list of installed apps with package name, app name, and system flag.
+     *
+     *  An app is reported as "system" only if it is a pure pre-installed system
+     *  app (FLAG_SYSTEM) AND has NOT been updated from the Play Store
+     *  (FLAG_UPDATED_SYSTEM_APP). This matters for apps like YouTube, Chrome,
+     *  Gmail, Maps etc., which ship pre-installed but receive Play Store
+     *  updates — parents typically DO want to set limits on those, so we treat
+     *  them as user apps.
+     *
+     *  Apps without a launcher activity (background services, overlays, etc.)
+     *  are omitted entirely so the picker only shows things the child can
+     *  actually open.
+     */
     private fun getInstalledApps(): List<Map<String, Any>> {
         val pm = packageManager
         val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-        return apps.map { appInfo ->
+        return apps.mapNotNull { appInfo ->
+            // Only include apps that have a launcher icon — filters out pure
+            // system infrastructure like "Android System WebView" or hidden
+            // services that the child cannot actually open.
+            val launch = pm.getLaunchIntentForPackage(appInfo.packageName) ?: return@mapNotNull null
+            if (launch.component == null) return@mapNotNull null
+
             val appName = pm.getApplicationLabel(appInfo).toString()
-            val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+            val flags = appInfo.flags
+            val isPureSystem = (flags and ApplicationInfo.FLAG_SYSTEM) != 0
+            val isUpdatedSystem = (flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            // Treat pre-installed system apps that have been updated from the
+            // Play Store (YouTube, Chrome, Maps, Gmail, etc.) as user apps.
+            val isSystem = isPureSystem && !isUpdatedSystem
+
             mapOf(
                 "packageName" to appInfo.packageName,
                 "appName" to appName,
