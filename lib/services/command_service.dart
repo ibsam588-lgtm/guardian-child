@@ -15,6 +15,13 @@ class CommandService {
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _docCommandsSubscription;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _childDocSubscription;
+
+  /// First doc snapshot is ignored — if the parent already deleted the
+  /// child and we're only now subscribing, we still treat that as an
+  /// unpair. But when we first start listening against an EXISTING doc
+  /// (the normal case) we don't want a spurious unpair on startup.
+  bool _childDocSeen = false;
 
   /// Timestamp (local) at which [start] was last called. Used to skip
   /// historical command docs that would otherwise be replayed on every
@@ -30,7 +37,9 @@ class CommandService {
   void start(String childId) {
     _subscription?.cancel();
     _docCommandsSubscription?.cancel();
+    _childDocSubscription?.cancel();
     _startedAt = DateTime.now();
+    _childDocSeen = false;
 
     // Listen to top-level child_commands (siren, siren_stop)
     _subscription = _db
@@ -51,6 +60,20 @@ class CommandService {
         .listen(_handleDocCommands, onError: (e) {
       debugPrint('CommandService doc commands error: $e');
     });
+
+    // Listen to the main children/{childId} doc itself. When the parent
+    // removes the child from their account, they delete this document
+    // (and the commands subcollection seconds later) — so doc deletion
+    // is the most reliable "you are unpaired" signal, especially if the
+    // child device was offline at the moment the unpair command was
+    // written and it got cleaned up before the snapshot arrived.
+    _childDocSubscription = _db
+        .collection('children')
+        .doc(childId)
+        .snapshots()
+        .listen(_handleChildDocSnapshot, onError: (e) {
+      debugPrint('CommandService child doc error: $e');
+    });
   }
 
   void stop() {
@@ -58,6 +81,27 @@ class CommandService {
     _subscription = null;
     _docCommandsSubscription?.cancel();
     _docCommandsSubscription = null;
+    _childDocSubscription?.cancel();
+    _childDocSubscription = null;
+  }
+
+  void _handleChildDocSnapshot(
+      DocumentSnapshot<Map<String, dynamic>> snap) {
+    if (!_childDocSeen) {
+      _childDocSeen = true;
+      // If the VERY FIRST snapshot shows the doc doesn't exist, the parent
+      // has already removed this child (or the record was never created).
+      // Treat that as an unpair too.
+      if (!snap.exists) {
+        debugPrint('CommandService: child doc missing on first snapshot — unpairing');
+        onUnpairRequested?.call();
+      }
+      return;
+    }
+    if (!snap.exists) {
+      debugPrint('CommandService: child doc deleted — unpairing');
+      onUnpairRequested?.call();
+    }
   }
 
   void _handleSnapshot(QuerySnapshot<Map<String, dynamic>> snapshot) {
@@ -79,22 +123,27 @@ class CommandService {
       final data = change.doc.data();
       if (data == null) continue;
 
-      // Skip historical command docs: Firestore delivers every existing
-      // document as an `added` event on the initial snapshot, which would
-      // replay every siren / SOS / sync command the parent ever sent on
-      // each app restart. Only honour commands written AFTER we started
-      // listening (plus a small 30-second grace window for clock skew).
-      final ts = data['timestamp'];
-      if (ts is Timestamp && started != null) {
-        if (ts.toDate().isBefore(started.subtract(const Duration(seconds: 30)))) {
-          continue;
-        }
-      }
-
       // The parent app writes either {'command': 'unpair'} or
       // {'action': 'siren' | 'siren_stop' | 'unpair'} depending on the call site.
       // Support both field names so every command is honoured.
       final command = (data['command'] as String?) ?? (data['action'] as String?) ?? '';
+
+      // Skip historical command docs: Firestore delivers every existing
+      // document as an `added` event on the initial snapshot, which would
+      // replay every siren / SOS command the parent ever sent on each app
+      // restart. `unpair` is exempt — it's idempotent and we want it to
+      // fire even if the parent removed the child while this device was
+      // offline (in which case the unpair doc is "historical" by the time
+      // the child reconnects).
+      if (command != 'unpair') {
+        final ts = data['timestamp'];
+        if (ts is Timestamp && started != null) {
+          if (ts.toDate().isBefore(started.subtract(const Duration(seconds: 30)))) {
+            continue;
+          }
+        }
+      }
+
       switch (command) {
         case 'siren':
           debugPrint('CommandService: siren command received');

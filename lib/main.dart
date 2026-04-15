@@ -86,6 +86,11 @@ class _GuardianChildAppState extends State<GuardianChildApp>
     _commandService.onUnpairRequested = () {
       if (!mounted) return;
       context.read<MonitorService>().stop();
+      // Stop the command listeners too — otherwise they keep firing
+      // against the now-deleted childId, and the child-doc listener in
+      // particular would re-trigger this unpair callback every time
+      // Firestore re-confirms the doc is gone.
+      _commandService.stop();
       context.read<PairingService>().unpair();
     };
 

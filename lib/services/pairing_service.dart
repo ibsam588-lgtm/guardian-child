@@ -164,13 +164,17 @@ class PairingService extends ChangeNotifier {
   /// Unpair — called from settings if child wants to reset
   Future<void> unpair() async {
     if (childId != null) {
+      // Use .update() instead of .set(merge:true) so we don't resurrect
+      // the children/{childId} doc as a zombie record when the parent
+      // has already deleted it (unpair-via-deleteChild). .update() fails
+      // with NOT_FOUND in that case, which we swallow silently.
       try {
-        await _db.collection('children').doc(childId).set({
+        await _db.collection('children').doc(childId).update({
           'isOnline': false,
           'childAuthUid': FieldValue.delete(),
-        }, SetOptions(merge: true));
+        });
       } catch (e) {
-        debugPrint('Pairing: unpair Firestore error (non-fatal): $e');
+        debugPrint('Pairing: unpair Firestore update skipped (non-fatal): $e');
       }
     }
     await _prefs.remove(_kChildIdKey);
