@@ -21,6 +21,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   bool _callSmsGranted = false;
   bool _batteryOptimized = false;
   bool _accessibilityGranted = false;
+  bool _micGranted = false;
 
   @override
   void initState() {
@@ -53,6 +54,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final usage = await _checkUsageAccess();
     final battery = await _checkBatteryOptimization();
     final accessibility = await _checkAccessibility();
+    final mic = await Permission.microphone.isGranted;
 
     if (mounted) {
       setState(() {
@@ -62,6 +64,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         _hasUsageAccess = usage;
         _batteryOptimized = battery;
         _accessibilityGranted = accessibility;
+        _micGranted = mic;
       });
     }
   }
@@ -105,6 +108,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
       Permission.notification,
       Permission.phone,
       Permission.sms,
+      Permission.microphone,
     ].request();
 
     // After foreground location is granted, request background location
@@ -152,6 +156,16 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final sms = await Permission.sms.isGranted;
     setState(() {
       _callSmsGranted = phone && sms;
+      _requesting = false;
+    });
+  }
+
+  Future<void> _requestMic() async {
+    setState(() => _requesting = true);
+    await Permission.microphone.request();
+    final granted = await Permission.microphone.isGranted;
+    setState(() {
+      _micGranted = granted;
       _requesting = false;
     });
   }
@@ -279,6 +293,15 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                   // State will refresh via didChangeAppLifecycleState when user returns
                   setState(() => _requesting = false);
                 },
+              ),
+              const SizedBox(height: 16),
+              _PermissionItem(
+                icon: Icons.mic_outlined,
+                title: 'Microphone',
+                description:
+                    'Allow parent to hear ambient sound in emergencies',
+                isGranted: _micGranted,
+                onRequest: _requestMic,
               ),
               const SizedBox(height: 32),
               SizedBox(

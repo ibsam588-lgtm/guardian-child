@@ -111,7 +111,8 @@ class CommandService {
         final data = change.doc.data();
         if (data == null) continue;
         final type = data['type'] as String? ?? '';
-        _executeCommand(change.doc.id, type);
+        final childId = data['childId'] as String? ?? '';
+        _executeCommand(change.doc.id, type, childId: childId);
       }
     }
   }
@@ -161,7 +162,8 @@ class CommandService {
     }
   }
 
-  Future<void> _executeCommand(String docId, String type) async {
+  Future<void> _executeCommand(String docId, String type,
+      {String childId = ''}) async {
     try {
       switch (type) {
         case 'siren':
@@ -169,6 +171,12 @@ class CommandService {
           break;
         case 'siren_stop':
           await _stopSiren();
+          break;
+        case 'listen_start':
+          await _startListen(childId);
+          break;
+        case 'listen_stop':
+          await _stopListen();
           break;
         case 'unpair':
           debugPrint('CommandService: received unpair command');
@@ -207,6 +215,34 @@ class CommandService {
       debugPrint('CommandService: stopSiren not available on this platform');
     } catch (e) {
       debugPrint('CommandService: stopSiren error $e');
+    }
+  }
+
+  /// Starts the ambient-listen foreground service. The service records
+  /// 5s AAC chunks and uploads each one to
+  /// `children/{childId}/listen_chunks` in Firestore — the parent app
+  /// streams and plays them.
+  Future<void> _startListen(String childId) async {
+    if (childId.isEmpty) {
+      debugPrint('CommandService: listen_start missing childId — skipping');
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('startListen', {'childId': childId});
+    } on MissingPluginException {
+      debugPrint('CommandService: startListen not available on this platform');
+    } catch (e) {
+      debugPrint('CommandService: startListen error $e');
+    }
+  }
+
+  Future<void> _stopListen() async {
+    try {
+      await _channel.invokeMethod<void>('stopListen');
+    } on MissingPluginException {
+      debugPrint('CommandService: stopListen not available on this platform');
+    } catch (e) {
+      debugPrint('CommandService: stopListen error $e');
     }
   }
 }

@@ -1,5 +1,6 @@
 package com.guardian.child
 
+import android.Manifest
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -274,6 +275,33 @@ class MainActivity : FlutterActivity() {
                             result.success(null)
                         } catch (e: Exception) {
                             result.error("BLOCK_SCREEN_ERROR", e.message, null)
+                        }
+                    }
+
+                    "startListen" -> {
+                        val childId = call.argument<String>("childId") ?: ""
+                        if (childId.isBlank()) {
+                            result.error("BAD_ARG", "childId required", null)
+                            return@setMethodCallHandler
+                        }
+                        if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
+                            result.error("PERMISSION_DENIED", "Microphone not granted", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            ListenService.start(this, childId)
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("LISTEN_START_ERROR", e.message, null)
+                        }
+                    }
+
+                    "stopListen" -> {
+                        try {
+                            ListenService.stop(this)
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("LISTEN_STOP_ERROR", e.message, null)
                         }
                     }
 

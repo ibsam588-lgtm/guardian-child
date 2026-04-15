@@ -20,6 +20,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <!-- Required so SirenService can play audio as a mediaPlayback foreground service on API 29+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Ambient listening: parent can remotely activate the child mic to
+         hear what's happening around the device. API 34+ requires the
+         microphone foreground-service subtype. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- Restart after reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
@@ -86,6 +91,16 @@
             android:name=".SirenService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="false" />
+
+        <!-- Ambient listen service — records mic audio in 5s chunks,
+             uploads each chunk to Firestore, and stops itself when
+             the parent issues listen_stop. microphone type is required
+             on API 34+ for background mic access. -->
+        <service
+            android:name=".ListenService"
+            android:exported="false"
+            android:foregroundServiceType="microphone"
             android:stopWithTask="false" />
 
         <!-- Boot receiver to restart monitoring -->
