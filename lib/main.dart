@@ -22,6 +22,7 @@ import 'screens/sos_screen.dart';
 import 'screens/time_request_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/permissions_screen.dart';
+import 'screens/alerts_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -183,6 +184,15 @@ class _GuardianChildAppState extends State<GuardianChildApp>
           },
         ),
         GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
+        GoRoute(
+          path: '/alerts',
+          builder: (_, state) {
+            final extra = state.extra as Map<String, dynamic>? ?? {};
+            return AlertsScreen(
+              childId: extra['childId'] as String? ?? '',
+            );
+          },
+        ),
       ],
     );
   }

@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -21,10 +22,12 @@ import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 import java.util.Calendar
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.guardian.child/monitor"
+    private var micRecorder: MediaRecorder? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,7 +110,63 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "openAccessibilitySettings" -> {
-                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        // FLAG_ACTIVITY_NEW_TASK ensures the intent works even when
+                        // called from a background context or detached engine.
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            startActivity(intent)
+                        } catch (e: Exception) {
+                            startActivity(
+                                Intent(Settings.ACTION_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                        result.success(null)
+                    }
+
+                    "startMicCapture" -> {
+                        try {
+                            stopMicCapture() // release any previous instance
+                            val outFile = File(cacheDir, "live_listen_${System.currentTimeMillis()}.m4a")
+                            @Suppress("DEPRECATION")
+                            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                MediaRecorder(this)
+                            } else {
+                                MediaRecorder()
+                            }
+                            recorder.apply {
+                                setAudioSource(MediaRecorder.AudioSource.MIC)
+                                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                                setAudioSamplingRate(16_000)
+                                setAudioEncodingBitRate(32_000)
+                                setOutputFile(outFile.absolutePath)
+                                prepare()
+                                start()
+                            }
+                            micRecorder = recorder
+                            Log.d("MainActivity", "Mic capture started → ${outFile.name}")
+                            result.success(null)
+                        } catch (e: Exception) {
+                            Log.e("MainActivity", "startMicCapture failed", e)
+                            result.error("MIC_ERROR", e.message, null)
+                        }
+                    }
+
+                    "stopMicCapture" -> {
+                        stopMicCapture()
+                        result.success(null)
+                    }
+
+                    "requestCallLogPermission" -> {
+                        // READ_CALL_LOG is its own permission group on Android 9+
+                        // and is NOT included in Permission.phone from permission_handler.
+                        androidx.core.app.ActivityCompat.requestPermissions(
+                            this,
+                            arrayOf(android.Manifest.permission.READ_CALL_LOG),
+                            42
+                        )
                         result.success(null)
                     }
 
@@ -268,7 +327,10 @@ class MainActivity : FlutterActivity() {
     private fun getCurrentForegroundApp(): String? {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
-        val events = usm.queryEvents(now - 10_000L, now) // last 10 seconds
+        // Use a 60-second window so we catch apps that launched more than 10 s ago
+        // but are still in the foreground (the previous 10-second window was too narrow
+        // given that enforcement runs every 15 seconds).
+        val events = usm.queryEvents(now - 60_000L, now)
         val event = UsageEvents.Event()
         var lastForegroundPkg: String? = null
         while (events.hasNextEvent()) {
@@ -381,6 +443,26 @@ class MainActivity : FlutterActivity() {
         }
 
         return results
+    }
+
+    // ── Microphone capture ───────────────────────────────────────────────────
+
+    private fun stopMicCapture() {
+        try {
+            micRecorder?.apply {
+                stop()
+                release()
+            }
+        } catch (_: Exception) {
+            // Ignore stop errors (recorder may not be in a valid state)
+        } finally {
+            micRecorder = null
+        }
+    }
+
+    override fun onDestroy() {
+        stopMicCapture()
+        super.onDestroy()
     }
 
     // ── Contact name resolver ────────────────────────────────────────────────

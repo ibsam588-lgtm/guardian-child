@@ -37,6 +37,11 @@
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
+    <!-- Microphone — required for live-listen audio monitoring -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Required for foreground service using microphone type on API 34+ -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <application
         android:label="GuardIan Child"
         android:name="${applicationName}"

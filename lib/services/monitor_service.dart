@@ -668,20 +668,53 @@ class MonitorService extends ChangeNotifier {
   }
 
   void _handleLiveListenStart(String childId, Map<String, dynamic> data) {
-    // Write an acknowledgment to audio_clips so parent knows we received the command
+    // Acknowledge the command so the parent sees 'active' (not stuck at 'connecting').
+    // Write with 'active' status so the parent app can move past the Connecting state.
     _db.collection('children').doc(childId).collection('audio_clips').add({
-      'status': 'recording',
+      'status': 'active',
       'createdAt': FieldValue.serverTimestamp(),
       'parentUid': data['parentUid'],
       'durationSeconds': data['durationSeconds'] ?? 60,
     }).catchError((e) => debugPrint('audio_clips write error: $e'));
-    debugPrint('Live listen: started recording');
-    // TODO: Implement actual audio recording via platform channel
+
+    // Also update the live_listen command doc so the parent knows we are connected.
+    _db
+        .collection('children')
+        .doc(childId)
+        .collection('commands')
+        .doc('live_listen')
+        .set({
+      'action': 'active',
+      'startedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true)).catchError(
+            (e) => debugPrint('live_listen ack error: $e'));
+
+    // Start microphone capture via native channel.
+    _channel.invokeMethod<void>('startMicCapture').catchError((e) {
+      debugPrint('startMicCapture error: $e');
+    });
+
+    debugPrint('Live listen: started');
   }
 
   void _handleLiveListenStop(String childId) {
+    _channel.invokeMethod<void>('stopMicCapture').catchError((e) {
+      debugPrint('stopMicCapture error: $e');
+    });
+
+    // Update status to 'stopped' so the parent UI exits the listening view.
+    _db
+        .collection('children')
+        .doc(childId)
+        .collection('commands')
+        .doc('live_listen')
+        .set({
+      'action': 'stopped',
+      'stoppedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true)).catchError(
+            (e) => debugPrint('live_listen stop ack error: $e'));
+
     debugPrint('Live listen: stopped');
-    // TODO: Stop audio recording
   }
 
   void _listenToAppLimits(String childId) {

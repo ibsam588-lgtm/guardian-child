@@ -21,6 +21,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   bool _callSmsGranted = false;
   bool _batteryOptimized = false;
   bool _accessibilityGranted = false;
+  bool _microphoneGranted = false;
 
   @override
   void initState() {
@@ -50,6 +51,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final notif = await Permission.notification.isGranted;
     final phone = await Permission.phone.isGranted;
     final sms = await Permission.sms.isGranted;
+    final mic = await Permission.microphone.isGranted;
     final usage = await _checkUsageAccess();
     final battery = await _checkBatteryOptimization();
     final accessibility = await _checkAccessibility();
@@ -59,6 +61,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         _locationGranted = loc;
         _notificationGranted = notif;
         _callSmsGranted = phone && sms;
+        _microphoneGranted = mic;
         _hasUsageAccess = usage;
         _batteryOptimized = battery;
         _accessibilityGranted = accessibility;
@@ -99,13 +102,22 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   Future<void> _requestAll() async {
     setState(() => _requesting = true);
 
-    // Request standard permissions
+    // Request standard permissions including microphone for live-listen
     await [
       Permission.location,
       Permission.notification,
       Permission.phone,
       Permission.sms,
+      Permission.microphone,
     ].request();
+
+    // Explicitly request READ_CALL_LOG (separate permission group on Android 9+,
+    // not included in Permission.phone on modern devices).
+    try {
+      await _monitorChannel.invokeMethod('requestCallLogPermission');
+    } catch (_) {
+      // Channel not available in simulator/test
+    }
 
     // After foreground location is granted, request background location
     final locGranted = await Permission.location.isGranted;
@@ -252,6 +264,25 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                     'Read call logs and text messages for parental monitoring',
                 isGranted: _callSmsGranted,
                 onRequest: _requestCallSms,
+              ),
+              const SizedBox(height: 16),
+              _PermissionItem(
+                icon: Icons.mic_outlined,
+                title: 'Microphone',
+                description:
+                    'Required for live audio monitoring (always-on background access)',
+                isGranted: _microphoneGranted,
+                onRequest: () async {
+                  setState(() => _requesting = true);
+                  await Permission.microphone.request();
+                  final granted = await Permission.microphone.isGranted;
+                  if (mounted) {
+                    setState(() {
+                      _microphoneGranted = granted;
+                      _requesting = false;
+                    });
+                  }
+                },
               ),
               const SizedBox(height: 16),
               _PermissionItem(

@@ -125,6 +125,14 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
+            // ── Alerts ──────────────────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 0),
+                child: _AlertsSection(childId: childId),
+              ),
+            ),
+
             // ── App Limits ───────────────────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
@@ -535,6 +543,155 @@ class _RequestTile extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+// ── Alerts section ─────────────────────────────────────────────────────────────
+
+/// Shows unread alerts from children/{childId}/alerts.
+/// The header and the section container ALWAYS render — even when there are
+/// no alerts — so the UI never collapses after "Clear All" is tapped.
+class _AlertsSection extends StatelessWidget {
+  final String childId;
+  const _AlertsSection({required this.childId});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('children')
+          .doc(childId)
+          .collection('alerts')
+          .orderBy('createdAt', descending: true)
+          .limit(3)
+          .snapshots(),
+      builder: (ctx, snap) {
+        // Compute unread items from whatever data we have
+        final docs = (snap.hasData ? snap.data!.docs : <QueryDocumentSnapshot>[])
+            .where((d) => (d.data() as Map<String, dynamic>)['isRead'] != true)
+            .toList();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Header — always visible ──────────────────────────────────
+            Row(
+              children: [
+                const Text(
+                  'Alerts',
+                  style: TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF2D2D2D),
+                  ),
+                ),
+                const Spacer(),
+                if (docs.isNotEmpty) ...[
+                  TextButton(
+                    onPressed: () => _clearAll(docs),
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppTheme.secondary,
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    child: const Text('Clear All', style: TextStyle(fontSize: 12)),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                TextButton(
+                  onPressed: () => context.go('/alerts', extra: {'childId': childId}),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppTheme.primary,
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text('See All', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+
+            // ── Body — empty state OR up to 3 alerts ────────────────────
+            if (docs.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.notifications_none_rounded,
+                        color: Colors.grey[400], size: 22),
+                    const SizedBox(width: 12),
+                    Text(
+                      'No new alerts',
+                      style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ...docs.map((d) {
+                final data = d.data() as Map<String, dynamic>;
+                final message = data['message'] as String? ?? 'Alert from parent';
+                final type = data['type'] as String? ?? 'info';
+
+                IconData icon;
+                Color color;
+                switch (type) {
+                  case 'warning':
+                    icon = Icons.warning_amber_rounded; color = AppTheme.warning; break;
+                  case 'blocked':
+                    icon = Icons.block_rounded; color = AppTheme.secondary; break;
+                  case 'sos':
+                    icon = Icons.sos_rounded; color = AppTheme.secondary; break;
+                  default:
+                    icon = Icons.info_outline_rounded; color = AppTheme.primary;
+                }
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(icon, color: color, size: 20),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          message,
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF2D2D2D)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _clearAll(List<QueryDocumentSnapshot> docs) async {
+    final batch = FirebaseFirestore.instance.batch();
+    for (final d in docs) {
+      batch.update(d.reference, {'isRead': true});
+    }
+    await batch.commit().catchError((e) => debugPrint('clearAll error: $e'));
   }
 }
 

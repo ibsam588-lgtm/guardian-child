@@ -12,7 +12,9 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
@@ -48,6 +50,8 @@ class SirenService : Service() {
 
     private var sirenPlayer: MediaPlayer? = null
     private var originalVolume: Int = -1
+    private val autoStopHandler = Handler(Looper.getMainLooper())
+    private val autoStopRunnable = Runnable { stopSelf() }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -66,6 +70,9 @@ class SirenService : Service() {
             startForeground(NOTIFICATION_ID, buildNotification())
         }
         playSiren()
+        // Auto-stop after 5 seconds — the parent can re-trigger if needed.
+        autoStopHandler.removeCallbacks(autoStopRunnable)
+        autoStopHandler.postDelayed(autoStopRunnable, 5_000L)
         // START_STICKY: if the OS kills this service, restart it automatically
         return START_STICKY
     }
@@ -165,6 +172,7 @@ class SirenService : Service() {
     }
 
     override fun onDestroy() {
+        autoStopHandler.removeCallbacks(autoStopRunnable)
         stopSiren()
         super.onDestroy()
     }
