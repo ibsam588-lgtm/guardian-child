@@ -3,14 +3,18 @@ package com.guardian.child
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.CallLog
 import android.provider.ContactsContract
@@ -21,10 +25,16 @@ import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 import java.util.Calendar
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.guardian.child/monitor"
+
+    // ── Audio recording (live-listen) ─────────────────────────────────────────
+    private var mediaRecorder: MediaRecorder? = null
+    private var audioOutputPath: String? = null
+    private val recordingStopHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,7 +117,25 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "openAccessibilitySettings" -> {
-                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        // Try to jump directly to the GuardIan accessibility service entry.
+                        // The ":settings:fragment_args_key" extra is an internal Android Settings
+                        // convention that works on most OEM ROMs (AOSP, Samsung, Pixel).
+                        val serviceComponent = ComponentName(
+                            packageName,
+                            BrowserMonitorService::class.java.name
+                        ).flattenToString()
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                            val args = Bundle()
+                            args.putString(":settings:fragment_args_key", serviceComponent)
+                            putExtra(":settings:show_fragment_args", args)
+                            putExtra(":settings:fragment_args_key", serviceComponent)
+                        }
+                        try {
+                            startActivity(intent)
+                        } catch (e: Exception) {
+                            // Fallback: open the generic accessibility settings page
+                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
                         result.success(null)
                     }
 
@@ -181,16 +209,42 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "launchBlockScreen" -> {
-                        val packageName = call.argument<String>("packageName") ?: ""
+                        val blockedPkg = call.argument<String>("packageName") ?: ""
                         try {
-                            val intent = Intent(this, AppBlockedActivity::class.java).apply {
-                                putExtra("packageName", packageName)
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            val intent = Intent(applicationContext, AppBlockedActivity::class.java).apply {
+                                putExtra("packageName", blockedPkg)
+                                // FLAG_ACTIVITY_NEW_TASK is required when starting from a
+                                // non-Activity context (applicationContext). CLEAR_TOP ensures
+                                // only one block screen instance exists at a time.
+                                addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                                )
                             }
-                            startActivity(intent)
+                            applicationContext.startActivity(intent)
                             result.success(null)
                         } catch (e: Exception) {
                             result.error("BLOCK_SCREEN_ERROR", e.message, null)
+                        }
+                    }
+
+                    "startRecording" -> {
+                        val durationSeconds = call.argument<Int>("durationSeconds") ?: 60
+                        try {
+                            val path = startAudioRecording(durationSeconds)
+                            result.success(path)
+                        } catch (e: Exception) {
+                            result.error("RECORDING_ERROR", e.message, null)
+                        }
+                    }
+
+                    "stopRecording" -> {
+                        try {
+                            stopAudioRecording()
+                            result.success(audioOutputPath)
+                        } catch (e: Exception) {
+                            result.error("RECORDING_ERROR", e.message, null)
                         }
                     }
 
@@ -264,11 +318,13 @@ class MainActivity : FlutterActivity() {
             .associate { it.packageName to (it.totalTimeInForeground / 60_000L).toInt() }
     }
 
-    /** Returns the package name of the app currently in the foreground, or null. */
+    /** Returns the package name of the app currently in the foreground, or null.
+     *  Uses a 30-second window (was 10 s) so we never miss an app that moved
+     *  to foreground between enforcement ticks. */
     private fun getCurrentForegroundApp(): String? {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
-        val events = usm.queryEvents(now - 10_000L, now) // last 10 seconds
+        val events = usm.queryEvents(now - 30_000L, now) // last 30 seconds
         val event = UsageEvents.Event()
         var lastForegroundPkg: String? = null
         while (events.hasNextEvent()) {
@@ -278,6 +334,54 @@ class MainActivity : FlutterActivity() {
             }
         }
         return lastForegroundPkg
+    }
+
+    // ── Audio recording helpers ───────────────────────────────────────────────
+
+    /** Starts recording from the microphone into an AAC/M4A file.
+     *  Returns the absolute path of the output file. */
+    private fun startAudioRecording(durationSeconds: Int): String {
+        stopAudioRecording() // release any previous session
+
+        val outputFile = File(externalCacheDir ?: cacheDir, "listen_${System.currentTimeMillis()}.m4a")
+        audioOutputPath = outputFile.absolutePath
+
+        mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(this)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }.apply {
+            setAudioSource(MediaRecorder.AudioSource.MIC)
+            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            setAudioSamplingRate(44100)
+            setAudioEncodingBitRate(128_000)
+            setOutputFile(outputFile.absolutePath)
+            prepare()
+            start()
+        }
+
+        // Auto-stop once the requested duration has elapsed
+        recordingStopHandler.removeCallbacksAndMessages(null)
+        recordingStopHandler.postDelayed({
+            stopAudioRecording()
+        }, durationSeconds * 1_000L)
+
+        Log.d("MainActivity", "Recording started: ${outputFile.absolutePath}")
+        return outputFile.absolutePath
+    }
+
+    private fun stopAudioRecording() {
+        recordingStopHandler.removeCallbacksAndMessages(null)
+        try {
+            mediaRecorder?.stop()
+        } catch (_: Exception) { /* already stopped or never started */ }
+        try {
+            mediaRecorder?.release()
+        } catch (_: Exception) {}
+        mediaRecorder = null
+        Log.d("MainActivity", "Recording stopped")
     }
 
     // ── Call log ──────────────────────────────────────────────────────────────

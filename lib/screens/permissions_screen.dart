@@ -21,6 +21,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   bool _callSmsGranted = false;
   bool _batteryOptimized = false;
   bool _accessibilityGranted = false;
+  bool _micGranted = false;
 
   @override
   void initState() {
@@ -50,6 +51,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final notif = await Permission.notification.isGranted;
     final phone = await Permission.phone.isGranted;
     final sms = await Permission.sms.isGranted;
+    final mic = await Permission.microphone.isGranted;
     final usage = await _checkUsageAccess();
     final battery = await _checkBatteryOptimization();
     final accessibility = await _checkAccessibility();
@@ -59,6 +61,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         _locationGranted = loc;
         _notificationGranted = notif;
         _callSmsGranted = phone && sms;
+        _micGranted = mic;
         _hasUsageAccess = usage;
         _batteryOptimized = battery;
         _accessibilityGranted = accessibility;
@@ -105,6 +108,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
       Permission.notification,
       Permission.phone,
       Permission.sms,
+      Permission.microphone,
     ].request();
 
     // After foreground location is granted, request background location
@@ -152,6 +156,16 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final sms = await Permission.sms.isGranted;
     setState(() {
       _callSmsGranted = phone && sms;
+      _requesting = false;
+    });
+  }
+
+  Future<void> _requestMicrophone() async {
+    setState(() => _requesting = true);
+    await Permission.microphone.request();
+    final granted = await Permission.microphone.isGranted;
+    setState(() {
+      _micGranted = granted;
       _requesting = false;
     });
   }
@@ -252,6 +266,15 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                     'Read call logs and text messages for parental monitoring',
                 isGranted: _callSmsGranted,
                 onRequest: _requestCallSms,
+              ),
+              const SizedBox(height: 16),
+              _PermissionItem(
+                icon: Icons.mic_outlined,
+                title: 'Microphone',
+                description:
+                    'Always-on microphone access for remote audio monitoring',
+                isGranted: _micGranted,
+                onRequest: _requestMicrophone,
               ),
               const SizedBox(height: 16),
               _PermissionItem(

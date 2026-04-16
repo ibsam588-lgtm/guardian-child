@@ -176,13 +176,33 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
+            // ── Parent Messages ──────────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 8),
+                child: const Text(
+                  'Messages',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF2D2D2D)),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: _ParentMessages(childId: childId),
+            ),
+
             // ── Time Requests ────────────────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-                child: const Text(
-                  'My Requests',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF2D2D2D)),
+                child: Row(
+                  children: [
+                    const Text(
+                      'My Requests',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF2D2D2D)),
+                    ),
+                    const Spacer(),
+                    _ClearAllButton(childId: childId),
+                  ],
                 ),
               ),
             ),
@@ -383,7 +403,8 @@ class _AppLimitCard extends StatelessWidget {
           if (!isBlocked && limit.allowTimeRequests)
             TextButton(
               onPressed: () {
-                context.go('/time-request', extra: {
+                // push (not go) so pressing Back returns to Home
+                context.push('/time-request', extra: {
                   'appName': limit.appName,
                   'packageName': limit.packageName,
                 });
@@ -533,6 +554,154 @@ class _RequestTile extends StatelessWidget {
             child: Text(statusLabel, style: TextStyle(fontSize: 11, color: statusColor, fontWeight: FontWeight.w600)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Clear All button ───────────────────────────────────────────────────────────
+class _ClearAllButton extends StatelessWidget {
+  final String childId;
+  const _ClearAllButton({required this.childId});
+
+  Future<void> _clearAll(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear All Requests?'),
+        content: const Text('This will remove all your time requests. This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Clear All', style: TextStyle(color: Colors.red[700])),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final db = FirebaseFirestore.instance;
+      final snap = await db
+          .collection('timeRequests')
+          .where('childId', isEqualTo: childId)
+          .get();
+      final batch = db.batch();
+      for (final doc in snap.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not clear requests. Try again.')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      onPressed: () => _clearAll(context),
+      child: Text('Clear All',
+        style: TextStyle(fontSize: 13, color: Colors.grey[600], fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+// ── Parent messages ────────────────────────────────────────────────────────────
+class _ParentMessages extends StatelessWidget {
+  final String childId;
+  const _ParentMessages({required this.childId});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('children')
+          .doc(childId)
+          .collection('messages')
+          .orderBy('sentAt', descending: true)
+          .limit(10)
+          .snapshots(),
+      builder: (ctx, snap) {
+        if (snap.hasError) {
+          return _emptyMsg('No messages yet');
+        }
+        if (!snap.hasData) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: LinearProgressIndicator(),
+          );
+        }
+        final docs = snap.data!.docs;
+        if (docs.isEmpty) {
+          return _emptyMsg('No messages yet');
+        }
+        return ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          itemCount: docs.length,
+          itemBuilder: (_, i) {
+            final d = docs[i].data() as Map<String, dynamic>;
+            final text = d['text'] as String? ?? '';
+            final ts = (d['sentAt'] as Timestamp?)?.toDate();
+            final timeStr = ts != null
+                ? '${ts.hour.toString().padLeft(2, '0')}:${ts.minute.toString().padLeft(2, '0')}'
+                : '';
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8)],
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.person_rounded, color: AppTheme.primary, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Parent', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.primary)),
+                        const SizedBox(height: 2),
+                        Text(text, style: const TextStyle(fontSize: 14, color: Color(0xFF2D2D2D))),
+                      ],
+                    ),
+                  ),
+                  if (timeStr.isNotEmpty)
+                    Text(timeStr, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _emptyMsg(String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white, borderRadius: BorderRadius.circular(18),
+        ),
+        child: Text(text, style: const TextStyle(color: Colors.grey)),
       ),
     );
   }

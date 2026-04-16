@@ -71,6 +71,8 @@ class BrowserMonitorService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         prefs = getSharedPreferences("browser_monitor", MODE_PRIVATE)
+        // Reset the dedup guard so we re-capture the current URL after a restart
+        lastUrl = ""
         Log.d(TAG, "BrowserMonitorService connected")
     }
 

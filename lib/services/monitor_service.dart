@@ -667,21 +667,70 @@ class MonitorService extends ChangeNotifier {
     }, onError: (e) => debugPrint('syncApps listener error: $e'));
   }
 
-  void _handleLiveListenStart(String childId, Map<String, dynamic> data) {
-    // Write an acknowledgment to audio_clips so parent knows we received the command
-    _db.collection('children').doc(childId).collection('audio_clips').add({
-      'status': 'recording',
-      'createdAt': FieldValue.serverTimestamp(),
-      'parentUid': data['parentUid'],
-      'durationSeconds': data['durationSeconds'] ?? 60,
-    }).catchError((e) => debugPrint('audio_clips write error: $e'));
-    debugPrint('Live listen: started recording');
-    // TODO: Implement actual audio recording via platform channel
+  void _handleLiveListenStart(String childId, Map<String, dynamic> data) async {
+    final durationSeconds = data['durationSeconds'] as int? ?? 60;
+    final parentUid = data['parentUid'] as String? ?? '';
+
+    // Write initial status so parent sees the request was received
+    late final DocumentReference docRef;
+    try {
+      docRef = await _db
+          .collection('children')
+          .doc(childId)
+          .collection('audio_clips')
+          .add({
+        'status': 'connecting',
+        'createdAt': FieldValue.serverTimestamp(),
+        'parentUid': parentUid,
+        'durationSeconds': durationSeconds,
+      });
+    } catch (e) {
+      debugPrint('audio_clips write error: $e');
+      return;
+    }
+
+    try {
+      // Start native microphone recording via platform channel
+      final filePath = await _channel.invokeMethod<String>('startRecording', {
+        'durationSeconds': durationSeconds,
+      });
+
+      // Mark as actively recording (unblocks the parent's "Connecting" UI)
+      await docRef.update({
+        'status': 'recording',
+        'filePath': filePath ?? '',
+      });
+
+      debugPrint('Live listen: recording started → $filePath (${durationSeconds}s)');
+
+      // After the recording duration, update status to completed
+      Future.delayed(Duration(seconds: durationSeconds), () async {
+        try {
+          await docRef!.update({
+            'status': 'completed',
+            'completedAt': FieldValue.serverTimestamp(),
+          });
+          debugPrint('Live listen: recording completed');
+        } catch (e) {
+          debugPrint('Live listen: status update error: $e');
+        }
+      });
+    } on MissingPluginException {
+      debugPrint('Live listen: recording channel not available on this platform');
+      await docRef.update({'status': 'error', 'errorMessage': 'Recording not available'})
+          .catchError((_) => debugPrint('docRef update error'));
+    } catch (e) {
+      debugPrint('Live listen: recording failed — $e');
+      await docRef.update({'status': 'error', 'errorMessage': e.toString()})
+          .catchError((_) {});
+    }
   }
 
   void _handleLiveListenStop(String childId) {
-    debugPrint('Live listen: stopped');
-    // TODO: Stop audio recording
+    debugPrint('Live listen: stop requested');
+    _channel.invokeMethod<void>('stopRecording').catchError((e) {
+      debugPrint('Live listen: stopRecording error: $e');
+    });
   }
 
   void _listenToAppLimits(String childId) {
