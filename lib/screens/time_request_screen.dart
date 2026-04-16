@@ -72,7 +72,6 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
       packageName: widget.packageName,
       requestedMinutes: _selectedMinutes,
       childNote: _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
-      kind: widget._isPermission ? 'permission' : 'time',
     );
 
     if (!mounted) return;

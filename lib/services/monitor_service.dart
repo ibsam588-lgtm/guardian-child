@@ -706,7 +706,7 @@ class MonitorService extends ChangeNotifier {
       // After the recording duration, update status to completed
       Future.delayed(Duration(seconds: durationSeconds), () async {
         try {
-          await docRef!.update({
+          await docRef.update({
             'status': 'completed',
             'completedAt': FieldValue.serverTimestamp(),
           });
