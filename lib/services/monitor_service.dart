@@ -15,12 +15,6 @@ class AppLimitInfo {
   final bool isEnabled;
   final bool isBlocked;
   final bool allowTimeRequests;
-  /// Extra minutes the parent has granted via a time request. Added on top
-  /// of the daily limit for usage comparisons.
-  final int temporaryExtensionMinutes;
-  /// Expiry of any active extension. While this is in the future the child
-  /// enforcement loop treats the app as allowed (overrides isBlocked too).
-  final DateTime? extensionExpiresAt;
 
   AppLimitInfo({
     required this.packageName,
@@ -29,15 +23,7 @@ class AppLimitInfo {
     required this.isEnabled,
     required this.isBlocked,
     required this.allowTimeRequests,
-    this.temporaryExtensionMinutes = 0,
-    this.extensionExpiresAt,
   });
-
-  /// True if a parent-granted extension is currently active.
-  bool get hasActiveExtension {
-    final exp = extensionExpiresAt;
-    return exp != null && exp.isAfter(DateTime.now());
-  }
 
   factory AppLimitInfo.fromMap(Map<String, dynamic> d) {
     final dailyLimit = d['dailyLimitMinutes'] as int? ?? 60;
@@ -45,7 +31,6 @@ class AppLimitInfo {
     // Prefer the explicit 'isBlocked' field written by the parent app;
     // fall back to the implicit rule: enabled with a zero-minute daily limit.
     final isBlocked = d['isBlocked'] as bool? ?? (isEnabled && dailyLimit == 0);
-    final extTs = d['extensionExpiresAt'];
     return AppLimitInfo(
       packageName: d['packageName'] as String? ?? '',
       appName: d['appName'] as String? ?? '',
@@ -53,9 +38,6 @@ class AppLimitInfo {
       isEnabled: isEnabled,
       isBlocked: isBlocked,
       allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
-      temporaryExtensionMinutes:
-          (d['temporaryExtensionMinutes'] as num?)?.toInt() ?? 0,
-      extensionExpiresAt: extTs is Timestamp ? extTs.toDate() : null,
     );
   }
 }
@@ -245,7 +227,6 @@ class MonitorService extends ChangeNotifier {
           'lastLng': pos.longitude,
           'lastLocation': locationStr,
           'lastSeen': FieldValue.serverTimestamp(),
-          'isOnline': true,
         }, SetOptions(merge: true)),
         _db
             .collection('children')
@@ -418,33 +399,14 @@ class MonitorService extends ChangeNotifier {
 
       for (final limit in _appLimits) {
         if (!limit.isEnabled) continue;
-        // A parent-approved request grants a TEMPORARY extension. While it's
-        // active, skip enforcement entirely — this is what makes approvals
-        // time-limited while keeping permanent blocks permanent.
-        if (limit.hasActiveExtension) continue;
-
         final minutesUsed = (raw[limit.packageName] as num?)?.toInt() ?? 0;
-        // NOTE: temporaryExtensionMinutes is intentionally NOT added here.
-        // The `hasActiveExtension` short-circuit above already allows the
-        // child to keep using the app during the granted window. Adding
-        // the bump on top would also persist past expiration (and
-        // historically accumulated across approvals via a FieldValue.increment
-        // bug), permanently inflating the daily limit.
         final shouldBlock = limit.isBlocked ||
             (limit.dailyLimitMinutes > 0 && minutesUsed >= limit.dailyLimitMinutes);
 
         if (shouldBlock && currentPkg == limit.packageName) {
-          // Differentiate "parent hard-blocked this app" from "daily time limit
-          // reached" so the block screen can show the right copy and CTA.
-          final reason = limit.isBlocked ? 'blocked' : 'limit_reached';
           await _channel.invokeMethod<void>(
             'launchBlockScreen',
-            {
-              'packageName': limit.packageName,
-              'appName': limit.appName,
-              'reason': reason,
-              'allowTimeRequests': limit.allowTimeRequests,
-            },
+            {'packageName': limit.packageName},
           );
           break;
         }
@@ -486,43 +448,12 @@ class MonitorService extends ChangeNotifier {
           .toList();
 
       final newEntries = parsed.whereType<Map>().map((e) {
-        final rawUrl = e['url'] as String? ?? '';
-        // Chrome's URL bar often shows "example.com/page" with no scheme.
-        // Dart's Uri.parse treats that as a path, so .host is empty. Prepend
-        // https:// when the string has no scheme so searchQuery/host work.
-        final url = (rawUrl.startsWith('http://') || rawUrl.startsWith('https://'))
-            ? rawUrl
-            : 'https://$rawUrl';
-        final tsMillis = (e['timestamp'] as num?)?.toInt() ?? 0;
-        // Derive a human title from the URL. For search URLs (Google, Bing,
-        // DuckDuckGo, YouTube, etc.) we surface the search query itself so
-        // the parent sees "cats funny videos" instead of just "google.com".
-        String title = rawUrl;
-        String? searchQuery;
-        try {
-          final uri = Uri.parse(url);
-          searchQuery = _extractSearchQuery(uri);
-          if (searchQuery != null && searchQuery.isNotEmpty) {
-            title = searchQuery;
-          } else {
-            final host = uri.host;
-            if (host.isNotEmpty) {
-              title = host.replaceFirst(RegExp(r'^www\.'), '');
-            }
-          }
-        } catch (_) {/* keep url as title */}
+        final ts = DateTime.fromMillisecondsSinceEpoch(
+            (e['timestamp'] as num?)?.toInt() ?? 0);
         return <String, dynamic>{
-          'url':       url,
-          'title':     title,
+          'url':       e['url']     as String? ?? '',
           'browser':   e['browser'] as String? ?? 'browser',
-          if (searchQuery != null && searchQuery.isNotEmpty)
-            'searchQuery': searchQuery,
-          // Parent app reads `date` as epoch millis for the time label.
-          // Keep `visitedAt` as a Firestore Timestamp for any future
-          // server-side query support.
-          'date':      tsMillis,
-          'visitedAt': Timestamp.fromDate(
-              DateTime.fromMillisecondsSinceEpoch(tsMillis)),
+          'visitedAt': Timestamp.fromDate(ts),
         };
       }).toList();
 
@@ -544,33 +475,6 @@ class MonitorService extends ChangeNotifier {
     } catch (e) {
       debugPrint('BrowserSync error: $e');
     }
-  }
-
-  /// Pulls the user's search terms out of a search-engine URL.
-  /// Returns null for URLs that aren't recognisable searches.
-  String? _extractSearchQuery(Uri uri) {
-    final host = uri.host.toLowerCase();
-    // Different search engines use different query-parameter names.
-    String? param;
-    if (host.contains('google.') ||
-        host.contains('bing.com') ||
-        host.contains('yahoo.com') ||
-        host.contains('youtube.com') ||
-        host.contains('m.youtube.com')) {
-      param = 'q';
-    } else if (host.contains('duckduckgo.com')) {
-      param = 'q';
-    } else if (host.contains('yandex.')) {
-      param = 'text';
-    } else if (host.contains('baidu.com')) {
-      param = 'wd';
-    } else if (host.contains('search.brave.com')) {
-      param = 'q';
-    }
-    if (param == null) return null;
-    final raw = uri.queryParameters[param];
-    if (raw == null || raw.trim().isEmpty) return null;
-    return raw;
   }
 
   String _prettifyPackageName(String pkg) {
@@ -763,21 +667,70 @@ class MonitorService extends ChangeNotifier {
     }, onError: (e) => debugPrint('syncApps listener error: $e'));
   }
 
-  void _handleLiveListenStart(String childId, Map<String, dynamic> data) {
-    // Write an acknowledgment to audio_clips so parent knows we received the command
-    _db.collection('children').doc(childId).collection('audio_clips').add({
-      'status': 'recording',
-      'createdAt': FieldValue.serverTimestamp(),
-      'parentUid': data['parentUid'],
-      'durationSeconds': data['durationSeconds'] ?? 60,
-    }).then((_) {}, onError: (Object e) => debugPrint('audio_clips write error: $e'));
-    debugPrint('Live listen: started recording');
-    // TODO: Implement actual audio recording via platform channel
+  void _handleLiveListenStart(String childId, Map<String, dynamic> data) async {
+    final durationSeconds = data['durationSeconds'] as int? ?? 60;
+    final parentUid = data['parentUid'] as String? ?? '';
+
+    // Write initial status so parent sees the request was received
+    late final DocumentReference docRef;
+    try {
+      docRef = await _db
+          .collection('children')
+          .doc(childId)
+          .collection('audio_clips')
+          .add({
+        'status': 'connecting',
+        'createdAt': FieldValue.serverTimestamp(),
+        'parentUid': parentUid,
+        'durationSeconds': durationSeconds,
+      });
+    } catch (e) {
+      debugPrint('audio_clips write error: $e');
+      return;
+    }
+
+    try {
+      // Start native microphone recording via platform channel
+      final filePath = await _channel.invokeMethod<String>('startRecording', {
+        'durationSeconds': durationSeconds,
+      });
+
+      // Mark as actively recording (unblocks the parent's "Connecting" UI)
+      await docRef.update({
+        'status': 'recording',
+        'filePath': filePath ?? '',
+      });
+
+      debugPrint('Live listen: recording started → $filePath (${durationSeconds}s)');
+
+      // After the recording duration, update status to completed
+      Future.delayed(Duration(seconds: durationSeconds), () async {
+        try {
+          await docRef!.update({
+            'status': 'completed',
+            'completedAt': FieldValue.serverTimestamp(),
+          });
+          debugPrint('Live listen: recording completed');
+        } catch (e) {
+          debugPrint('Live listen: status update error: $e');
+        }
+      });
+    } on MissingPluginException {
+      debugPrint('Live listen: recording channel not available on this platform');
+      await docRef.update({'status': 'error', 'errorMessage': 'Recording not available'})
+          .catchError((_) => debugPrint('docRef update error'));
+    } catch (e) {
+      debugPrint('Live listen: recording failed — $e');
+      await docRef.update({'status': 'error', 'errorMessage': e.toString()})
+          .catchError((_) {});
+    }
   }
 
   void _handleLiveListenStop(String childId) {
-    debugPrint('Live listen: stopped');
-    // TODO: Stop audio recording
+    debugPrint('Live listen: stop requested');
+    _channel.invokeMethod<void>('stopRecording').catchError((e) {
+      debugPrint('Live listen: stopRecording error: $e');
+    });
   }
 
   void _listenToAppLimits(String childId) {
@@ -827,12 +780,6 @@ class MonitorService extends ChangeNotifier {
 
   /// Submit a time extension request from the child to the parent.
   /// Returns the new Firestore doc ID on success, or null on failure.
-  ///
-  /// [kind] is either:
-  ///   - "time"       — asking for extra minutes on an app whose limit
-  ///                    has been reached (default).
-  ///   - "permission" — asking for permission to use an app that is
-  ///                    hard-blocked by the parent.
   Future<String?> submitTimeRequest({
     required String childId,
     required String childName,
@@ -841,7 +788,6 @@ class MonitorService extends ChangeNotifier {
     required String packageName,
     required int requestedMinutes,
     String? childNote,
-    String kind = 'time',
   }) async {
     try {
       final ref = await _db.collection('timeRequests').add({
@@ -852,36 +798,9 @@ class MonitorService extends ChangeNotifier {
         'packageName': packageName,
         'requestedMinutes': requestedMinutes,
         'childNote': childNote ?? '',
-        'kind': kind,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
-        'expiresAt': Timestamp.fromDate(
-          DateTime.now().add(const Duration(minutes: 10)),
-        ),
       });
-
-      // Also write an `alerts` doc so the parent app — which already
-      // listens to the `alerts` collection on the home screen — shows a
-      // real-time banner / notification. The time_requests_screen watches
-      // `timeRequests` directly, so this is purely to wake the parent up.
-      final isPermission = kind == 'permission';
-      unawaited(_db.collection('alerts').add({
-        'childId': childId,
-        'parentUid': parentUid,
-        'type': isPermission ? 'unblock_request' : 'time_request',
-        'title': isPermission
-            ? '$childName is requesting an unblock'
-            : '$childName is asking for more time',
-        'subtitle': isPermission
-            ? 'Wants to use $appName for $requestedMinutes min.'
-            : 'Wants $requestedMinutes more min on $appName.',
-        'requestId': ref.id,
-        'packageName': packageName,
-        'appName': appName,
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
-      }));
-
       return ref.id;
     } catch (e) {
       debugPrint('submitTimeRequest error: $e');

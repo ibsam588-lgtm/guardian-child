@@ -135,6 +135,8 @@ class BrowserMonitorService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         prefs = getSharedPreferences("browser_monitor", MODE_PRIVATE)
+        // Reset the dedup guard so we re-capture the current URL after a restart
+        lastUrl = ""
         Log.d(TAG, "BrowserMonitorService connected")
         // Emit an initial "connected" status so the parent UI immediately
         // sees the service is up, even before the child opens a browser.

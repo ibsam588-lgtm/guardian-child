@@ -51,20 +51,20 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     final notif = await Permission.notification.isGranted;
     final phone = await Permission.phone.isGranted;
     final sms = await Permission.sms.isGranted;
+    final mic = await Permission.microphone.isGranted;
     final usage = await _checkUsageAccess();
     final battery = await _checkBatteryOptimization();
     final accessibility = await _checkAccessibility();
-    final mic = await Permission.microphone.isGranted;
 
     if (mounted) {
       setState(() {
         _locationGranted = loc;
         _notificationGranted = notif;
         _callSmsGranted = phone && sms;
+        _micGranted = mic;
         _hasUsageAccess = usage;
         _batteryOptimized = battery;
         _accessibilityGranted = accessibility;
-        _micGranted = mic;
       });
     }
   }
@@ -160,7 +160,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     });
   }
 
-  Future<void> _requestMic() async {
+  Future<void> _requestMicrophone() async {
     setState(() => _requesting = true);
     await Permission.microphone.request();
     final granted = await Permission.microphone.isGranted;
@@ -185,17 +185,9 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         backgroundColor: Colors.transparent,
         foregroundColor: Theme.of(context).colorScheme.onSurface,
       ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          // Pad for the system gesture/nav bar — without this the
-          // "Continue" button sits under the bar on phones with on-screen
-          // navigation and can't be tapped cleanly.
-          padding: EdgeInsets.fromLTRB(
-            0, 0, 0,
-            MediaQuery.of(context).viewPadding.bottom + 16,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -277,6 +269,15 @@ class _PermissionsScreenState extends State<PermissionsScreen>
               ),
               const SizedBox(height: 16),
               _PermissionItem(
+                icon: Icons.mic_outlined,
+                title: 'Microphone',
+                description:
+                    'Always-on microphone access for remote audio monitoring',
+                isGranted: _micGranted,
+                onRequest: _requestMicrophone,
+              ),
+              const SizedBox(height: 16),
+              _PermissionItem(
                 icon: Icons.accessibility_new_outlined,
                 title: 'Accessibility Service',
                 description:
@@ -294,15 +295,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                   setState(() => _requesting = false);
                 },
               ),
-              const SizedBox(height: 16),
-              _PermissionItem(
-                icon: Icons.mic_outlined,
-                title: 'Microphone',
-                description:
-                    'Allow parent to hear ambient sound in emergencies',
-                isGranted: _micGranted,
-                onRequest: _requestMic,
-              ),
               const SizedBox(height: 32),
               SizedBox(
                 width: double.infinity,
@@ -312,7 +304,6 @@ class _PermissionsScreenState extends State<PermissionsScreen>
                 ),
               ),
             ],
-          ),
           ),
         ),
       ),

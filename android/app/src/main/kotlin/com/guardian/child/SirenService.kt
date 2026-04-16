@@ -12,7 +12,9 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
@@ -48,6 +50,18 @@ class SirenService : Service() {
 
     private var sirenPlayer: MediaPlayer? = null
     private var originalVolume: Int = -1
+    private val autoStopHandler = Handler(Looper.getMainLooper())
+    private val autoStopRunnable = Runnable {
+        Log.d(TAG, "Siren auto-stopping after 5 seconds")
+        stopSiren()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        stopSelf()
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -136,11 +150,16 @@ class SirenService : Service() {
                     false
                 }
                 setDataSource(this@SirenService, alarmUri)
-                isLooping = true
+                isLooping = false  // play once; auto-stop handler handles 5-second cutoff
                 prepare()
                 start()
             }
-            Log.d(TAG, "Siren started at max volume ($maxVolume)")
+
+            // Auto-stop after 5 seconds regardless of sound length
+            autoStopHandler.removeCallbacks(autoStopRunnable)
+            autoStopHandler.postDelayed(autoStopRunnable, 5_000L)
+
+            Log.d(TAG, "Siren started at max volume ($maxVolume) — will auto-stop in 5 s")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to play siren", e)
         }
@@ -149,26 +168,24 @@ class SirenService : Service() {
     private fun stopSiren() {
         try {
             sirenPlayer?.let { player ->
-                if (player.isPlaying) {
-                    player.stop()
-                }
+                if (player.isPlaying) player.stop()
                 player.release()
             }
             sirenPlayer = null
 
-            // Restore original volume if we changed it
             if (originalVolume >= 0) {
                 val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 audioManager.setStreamVolume(AudioManager.STREAM_ALARM, originalVolume, 0)
                 originalVolume = -1
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to stop siren", e)
+            Log.w(TAG, "Error stopping siren: ${e.message}")
         }
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        autoStopHandler.removeCallbacks(autoStopRunnable)
         stopSiren()
+        super.onDestroy()
     }
 }

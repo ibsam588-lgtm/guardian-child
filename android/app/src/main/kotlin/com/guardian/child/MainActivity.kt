@@ -1,20 +1,21 @@
 package com.guardian.child
 
-import android.Manifest
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.database.Cursor
-import android.media.AudioManager
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
-import android.view.KeyEvent
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
@@ -24,60 +25,29 @@ import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 import java.util.Calendar
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.guardian.child/monitor"
 
-    /** Holds a deep-link intent (e.g. from AppBlockedActivity's "Ask Parent"
-     *  button) until Flutter is ready to consume it via `getInitialRoute`. */
-    private var pendingRoute: Map<String, Any?>? = null
-    private var methodChannel: MethodChannel? = null
+    // ── Audio recording (live-listen) ─────────────────────────────────────────
+    private var mediaRecorder: MediaRecorder? = null
+    private var audioOutputPath: String? = null
+    private val recordingStopHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // NOTE: Do NOT start MonitorService here — it needs location permission
         // and the child must be paired first. Flutter controls it via MethodChannel.
-        captureRouteFromIntent(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        captureRouteFromIntent(intent)
-        pendingRoute?.let { route ->
-            // Already-running app — push the route straight to Flutter.
-            methodChannel?.invokeMethod("navigateTo", route)
-            pendingRoute = null
-        }
-    }
-
-    /** Extracts the "route" + related extras from an intent into [pendingRoute]. */
-    private fun captureRouteFromIntent(intent: Intent?) {
-        val route = intent?.getStringExtra("route") ?: return
-        pendingRoute = mapOf(
-            "route" to route,
-            "packageName" to intent.getStringExtra("packageName"),
-            "appName" to intent.getStringExtra("appName"),
-            "reason" to intent.getStringExtra("reason"),
-        )
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
-        methodChannel!!
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-
-                    "getPendingRoute" -> {
-                        // Flutter polls this once on startup to pick up any
-                        // deep-link intent that launched the activity.
-                        val route = pendingRoute
-                        pendingRoute = null
-                        result.success(route)
-                    }
-
 
                     "startForegroundService" -> {
                         MonitorService.start(this)
@@ -147,7 +117,25 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "openAccessibilitySettings" -> {
-                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        // Try to jump directly to the GuardIan accessibility service entry.
+                        // The ":settings:fragment_args_key" extra is an internal Android Settings
+                        // convention that works on most OEM ROMs (AOSP, Samsung, Pixel).
+                        val serviceComponent = ComponentName(
+                            packageName,
+                            BrowserMonitorService::class.java.name
+                        ).flattenToString()
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                            val args = Bundle()
+                            args.putString(":settings:fragment_args_key", serviceComponent)
+                            putExtra(":settings:show_fragment_args", args)
+                            putExtra(":settings:fragment_args_key", serviceComponent)
+                        }
+                        try {
+                            startActivity(intent)
+                        } catch (e: Exception) {
+                            // Fallback: open the generic accessibility settings page
+                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
                         result.success(null)
                     }
 
@@ -221,77 +209,42 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "launchBlockScreen" -> {
-                        val packageName = call.argument<String>("packageName") ?: ""
-                        val appName = call.argument<String>("appName") ?: ""
-                        val reason = call.argument<String>("reason")
-                            ?: AppBlockedActivity.REASON_LIMIT_REACHED
-                        val allowTimeRequests = call.argument<Boolean>("allowTimeRequests") ?: true
+                        val blockedPkg = call.argument<String>("packageName") ?: ""
                         try {
-                            // Pause any playing media (YouTube, Spotify, etc.) so
-                            // the child isn't left with audio in the background
-                            // while the block screen takes over.
-                            try {
-                                val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                                am.dispatchMediaKeyEvent(
-                                    KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE)
+                            val intent = Intent(applicationContext, AppBlockedActivity::class.java).apply {
+                                putExtra("packageName", blockedPkg)
+                                // FLAG_ACTIVITY_NEW_TASK is required when starting from a
+                                // non-Activity context (applicationContext). CLEAR_TOP ensures
+                                // only one block screen instance exists at a time.
+                                addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP
                                 )
-                                am.dispatchMediaKeyEvent(
-                                    KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE)
-                                )
-                            } catch (e: Exception) {
-                                Log.w("MainActivity", "media pause dispatch failed: ${e.message}")
                             }
-
-                            // CRITICAL: do NOT press HOME here. On API 29+
-                            // Android forbids background activity launches
-                            // from a backgrounded app, so pressing HOME first
-                            // (which sends us to background) made the block
-                            // activity never appear — the child just saw
-                            // YouTube close with nothing in its place.
-                            //
-                            // Instead, call `AppBlockedActivity.launchOver()`
-                            // which tries the in-app activity-start and,
-                            // if the OS swallows it, falls back to posting a
-                            // full-screen-intent notification that Android
-                            // itself brings to the foreground. Either way
-                            // the child sees the "App Blocked" UI.
-                            AppBlockedActivity.launchOver(
-                                context = this,
-                                blockedPackage = packageName,
-                                appName = appName,
-                                reason = reason,
-                                allowTimeRequests = allowTimeRequests,
-                            )
+                            applicationContext.startActivity(intent)
                             result.success(null)
                         } catch (e: Exception) {
                             result.error("BLOCK_SCREEN_ERROR", e.message, null)
                         }
                     }
 
-                    "startListen" -> {
-                        val childId = call.argument<String>("childId") ?: ""
-                        if (childId.isBlank()) {
-                            result.error("BAD_ARG", "childId required", null)
-                            return@setMethodCallHandler
-                        }
-                        if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
-                            result.error("PERMISSION_DENIED", "Microphone not granted", null)
-                            return@setMethodCallHandler
-                        }
+                    "startRecording" -> {
+                        val durationSeconds = call.argument<Int>("durationSeconds") ?: 60
                         try {
-                            ListenService.start(this, childId)
-                            result.success(null)
+                            val path = startAudioRecording(durationSeconds)
+                            result.success(path)
                         } catch (e: Exception) {
-                            result.error("LISTEN_START_ERROR", e.message, null)
+                            result.error("RECORDING_ERROR", e.message, null)
                         }
                     }
 
-                    "stopListen" -> {
+                    "stopRecording" -> {
                         try {
-                            ListenService.stop(this)
-                            result.success(null)
+                            stopAudioRecording()
+                            result.success(audioOutputPath)
                         } catch (e: Exception) {
-                            result.error("LISTEN_STOP_ERROR", e.message, null)
+                            result.error("RECORDING_ERROR", e.message, null)
                         }
                     }
 
@@ -328,37 +281,13 @@ class MainActivity : FlutterActivity() {
 
     // ── Installed apps ────────────────────────────────────────────────────────
 
-    /** Returns a list of installed apps with package name, app name, and system flag.
-     *
-     *  An app is reported as "system" only if it is a pure pre-installed system
-     *  app (FLAG_SYSTEM) AND has NOT been updated from the Play Store
-     *  (FLAG_UPDATED_SYSTEM_APP). This matters for apps like YouTube, Chrome,
-     *  Gmail, Maps etc., which ship pre-installed but receive Play Store
-     *  updates — parents typically DO want to set limits on those, so we treat
-     *  them as user apps.
-     *
-     *  Apps without a launcher activity (background services, overlays, etc.)
-     *  are omitted entirely so the picker only shows things the child can
-     *  actually open.
-     */
+    /** Returns a list of installed apps with package name, app name, and system flag. */
     private fun getInstalledApps(): List<Map<String, Any>> {
         val pm = packageManager
         val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-        return apps.mapNotNull { appInfo ->
-            // Only include apps that have a launcher icon — filters out pure
-            // system infrastructure like "Android System WebView" or hidden
-            // services that the child cannot actually open.
-            val launch = pm.getLaunchIntentForPackage(appInfo.packageName) ?: return@mapNotNull null
-            if (launch.component == null) return@mapNotNull null
-
+        return apps.map { appInfo ->
             val appName = pm.getApplicationLabel(appInfo).toString()
-            val flags = appInfo.flags
-            val isPureSystem = (flags and ApplicationInfo.FLAG_SYSTEM) != 0
-            val isUpdatedSystem = (flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-            // Treat pre-installed system apps that have been updated from the
-            // Play Store (YouTube, Chrome, Maps, Gmail, etc.) as user apps.
-            val isSystem = isPureSystem && !isUpdatedSystem
-
+            val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             mapOf(
                 "packageName" to appInfo.packageName,
                 "appName" to appName,
@@ -389,11 +318,13 @@ class MainActivity : FlutterActivity() {
             .associate { it.packageName to (it.totalTimeInForeground / 60_000L).toInt() }
     }
 
-    /** Returns the package name of the app currently in the foreground, or null. */
+    /** Returns the package name of the app currently in the foreground, or null.
+     *  Uses a 30-second window (was 10 s) so we never miss an app that moved
+     *  to foreground between enforcement ticks. */
     private fun getCurrentForegroundApp(): String? {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
-        val events = usm.queryEvents(now - 10_000L, now) // last 10 seconds
+        val events = usm.queryEvents(now - 30_000L, now) // last 30 seconds
         val event = UsageEvents.Event()
         var lastForegroundPkg: String? = null
         while (events.hasNextEvent()) {
@@ -403,6 +334,54 @@ class MainActivity : FlutterActivity() {
             }
         }
         return lastForegroundPkg
+    }
+
+    // ── Audio recording helpers ───────────────────────────────────────────────
+
+    /** Starts recording from the microphone into an AAC/M4A file.
+     *  Returns the absolute path of the output file. */
+    private fun startAudioRecording(durationSeconds: Int): String {
+        stopAudioRecording() // release any previous session
+
+        val outputFile = File(externalCacheDir ?: cacheDir, "listen_${System.currentTimeMillis()}.m4a")
+        audioOutputPath = outputFile.absolutePath
+
+        mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(this)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }.apply {
+            setAudioSource(MediaRecorder.AudioSource.MIC)
+            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            setAudioSamplingRate(44100)
+            setAudioEncodingBitRate(128_000)
+            setOutputFile(outputFile.absolutePath)
+            prepare()
+            start()
+        }
+
+        // Auto-stop once the requested duration has elapsed
+        recordingStopHandler.removeCallbacksAndMessages(null)
+        recordingStopHandler.postDelayed({
+            stopAudioRecording()
+        }, durationSeconds * 1_000L)
+
+        Log.d("MainActivity", "Recording started: ${outputFile.absolutePath}")
+        return outputFile.absolutePath
+    }
+
+    private fun stopAudioRecording() {
+        recordingStopHandler.removeCallbacksAndMessages(null)
+        try {
+            mediaRecorder?.stop()
+        } catch (_: Exception) { /* already stopped or never started */ }
+        try {
+            mediaRecorder?.release()
+        } catch (_: Exception) {}
+        mediaRecorder = null
+        Log.d("MainActivity", "Recording stopped")
     }
 
     // ── Call log ──────────────────────────────────────────────────────────────
