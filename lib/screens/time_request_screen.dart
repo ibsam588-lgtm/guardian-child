@@ -91,11 +91,14 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
 
   void _watchRequest(String id) {
     final monitor = context.read<MonitorService>();
-    _watchSub = monitor.watchTimeRequest(id).listen((data) {
-      if (data != null && mounted) {
-        setState(() => _status = data['status'] ?? 'pending');
-      }
-    });
+    _watchSub = monitor.watchTimeRequest(id).listen(
+      (data) {
+        if (data != null && mounted) {
+          setState(() => _status = data['status'] ?? 'pending');
+        }
+      },
+      onError: (e) => debugPrint('watchTimeRequest error: $e'),
+    );
   }
 
   @override

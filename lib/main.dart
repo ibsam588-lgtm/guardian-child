@@ -94,6 +94,11 @@ class _GuardianChildAppState extends State<GuardianChildApp>
       context.read<PairingService>().unpair();
     };
 
+    _commandService.onSosRequested = () {
+      if (!mounted) return;
+      context.go('/sos');
+    };
+
     // Listen for deep-link navigation pushed from native — e.g. when the
     // AppBlockedActivity's "Ask Parent" button relaunches this activity while
     // Flutter is already running.

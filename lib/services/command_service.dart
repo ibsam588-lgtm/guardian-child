@@ -33,6 +33,11 @@ class CommandService {
   /// The registered handler should stop MonitorService and call PairingService.unpair().
   VoidCallback? onUnpairRequested;
 
+  /// Called when the parent sends an SOS command to trigger the SOS flow on
+  /// this device (e.g., navigate to /sos so the child can confirm and send
+  /// their location).
+  VoidCallback? onSosRequested;
+
   /// Start listening for commands targeted at [childId].
   void start(String childId) {
     _subscription?.cancel();
@@ -171,6 +176,10 @@ class CommandService {
           break;
         case 'siren_stop':
           await _stopSiren();
+          break;
+        case 'sos':
+          debugPrint('CommandService: received sos command');
+          onSosRequested?.call();
           break;
         case 'listen_start':
           await _startListen(childId);
