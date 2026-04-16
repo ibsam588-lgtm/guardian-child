@@ -119,10 +119,13 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       final lockedChildId = childId;
       _autoResetTimer = Timer(const Duration(seconds: 30), () {
         if (lockedChildId.isEmpty) return;
-        unawaited(FirebaseFirestore.instance
+        FirebaseFirestore.instance
             .collection('children')
             .doc(lockedChildId)
-            .set({'sosActive': false}, SetOptions(merge: true)));
+            .set({'sosActive': false}, SetOptions(merge: true))
+            .catchError((e) {
+          debugPrint('SOS auto-cancel error: $e');
+        });
       });
     } catch (e) {
       if (!mounted) return;

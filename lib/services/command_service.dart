@@ -174,12 +174,13 @@ class CommandService {
         case 'siren':
           await _playSiren();
           break;
-        case 'siren_stop':
-          await _stopSiren();
-          break;
         case 'sos':
           debugPrint('CommandService: received sos command');
+          await _playSiren();
           onSosRequested?.call();
+          break;
+        case 'siren_stop':
+          await _stopSiren();
           break;
         case 'listen_start':
           await _startListen(childId);

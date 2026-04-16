@@ -43,7 +43,12 @@ class PairingService extends ChangeNotifier {
       debugPrint('Pairing: code doc found: ${data.keys.toList()}');
 
       // ── Step 2: Validate code ────────────────────────────────────────────
-      final expiresAt = (data['expiresAt'] as Timestamp).toDate();
+      final expiresAtRaw = data['expiresAt'];
+      if (expiresAtRaw == null || expiresAtRaw is! Timestamp) {
+        debugPrint('Pairing: code doc missing or invalid expiresAt field');
+        return PairingResult.error;
+      }
+      final expiresAt = expiresAtRaw.toDate();
       if (DateTime.now().isAfter(expiresAt)) {
         debugPrint('Pairing: code expired at $expiresAt');
         return PairingResult.expired;

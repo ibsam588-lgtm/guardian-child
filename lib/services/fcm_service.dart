@@ -26,7 +26,10 @@ class FcmService {
         await _saveToken(token);
       }
 
-      _fcm.onTokenRefresh.listen((newToken) => _saveToken(newToken));
+      _fcm.onTokenRefresh.listen(
+        (newToken) => _saveToken(newToken),
+        onError: (e) => debugPrint('FCM: token refresh error: $e'),
+      );
 
       FirebaseMessaging.onMessage.listen((msg) {
         // Handle siren commands delivered via FCM data payload
