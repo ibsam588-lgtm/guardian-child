@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -192,6 +193,12 @@ class BrowserMonitorService : AccessibilityService() {
             val titleQuery = if (url.isNotEmpty() && extractSearchQuery(url).isEmpty()) {
                 scanForSearchTitle(rootNode, url)
             } else ""
+            // Additional fallback: find the first plausible page-title
+            // text node so we ALWAYS have something parent-facing even
+            // when search-term extraction fails. For non-search pages
+            // this is useful context too ('Read a book on Wikipedia'
+            // is more informative than 'en.wikipedia.org/wiki/...').
+            val pageTitle = findPageTitle(rootNode, url)
             rootNode.recycle()
 
             if (url.isEmpty() || url == lastUrl) {
@@ -226,7 +233,7 @@ class BrowserMonitorService : AccessibilityService() {
             // Write directly to Firestore so history is synced even when the
             // Flutter app is not running (e.g. the user swiped it from recents
             // and the Dart polling timers are no longer firing).
-            writeUrlToFirestore(url, packageName, titleQuery)
+            writeUrlToFirestore(url, packageName, titleQuery, pageTitle)
 
             writeDiagnosticStatus(force = true)
         } catch (e: Exception) {
@@ -258,6 +265,7 @@ class BrowserMonitorService : AccessibilityService() {
         url: String,
         packageName: String,
         titleFallback: String = "",
+        pageTitle: String = "",
     ) {
         val childId = getChildId() ?: return
 
@@ -293,6 +301,9 @@ class BrowserMonitorService : AccessibilityService() {
         if (searchQuery.isNotEmpty()) {
             entry["searchQuery"] = searchQuery
             entry["searchEngine"] = detectSearchEngine(url)
+        }
+        if (pageTitle.isNotEmpty()) {
+            entry["pageTitle"] = pageTitle
         }
 
         val col = FirebaseFirestore.getInstance()
@@ -448,6 +459,128 @@ class BrowserMonitorService : AccessibilityService() {
             if (r.isNotEmpty()) return r
         }
         return ""
+    }
+
+    /**
+     * Best-effort page-title extractor. Returns the first text node that
+     * looks like a plausible page/tab title — long enough to be
+     * informative, short enough to fit on a row, and not the URL itself
+     * or a known button/control label. Used as a fallback when the
+     * search-term extractors both fail, so the parent UI has something
+     * better than a bare URL to show.
+     *
+     * Heuristics:
+     *  - 10 to 200 chars after trim
+     *  - doesn't start with http:// or https://
+     *  - doesn't contain the URL's host (to avoid grabbing the omnibox text)
+     *  - isn't a single word that looks like a toolbar label ("Menu",
+     *    "More", "Tab", "Back", "Forward", etc.)
+     *  - preferred: AccessibilityNodeInfo.paneTitle when set by Chrome
+     *    on the web content frame (Android O+)
+     */
+    private fun findPageTitle(
+        root: AccessibilityNodeInfo,
+        url: String,
+    ): String {
+        // Extract host so we can reject nodes whose text matches the URL
+        // bar (which would produce pageTitle = 'google.com/search' —
+        // exactly the noise we're trying to get rid of).
+        val host = try {
+            android.net.Uri.parse(url).host?.lowercase().orEmpty()
+        } catch (_: Exception) { "" }
+
+        // Chrome exposes the tab's page title via the web-content frame's
+        // paneTitle from Android O onward. Check that first — it's the
+        // cleanest source and bypasses the DFS entirely.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val paneHit = findPaneTitle(root, host, depth = 0, maxDepth = 12)
+            if (paneHit.isNotEmpty()) return paneHit
+        }
+
+        return try {
+            scanForPlausibleTitle(root, host, url, depth = 0, maxDepth = 12)
+        } catch (_: Exception) { "" }
+    }
+
+    private fun findPaneTitle(
+        node: AccessibilityNodeInfo?,
+        host: String,
+        depth: Int,
+        maxDepth: Int,
+    ): String {
+        if (node == null || depth > maxDepth) return ""
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val pane = node.paneTitle?.toString()?.trim().orEmpty()
+            if (pane.length in 10..200 &&
+                !pane.startsWith("http://") &&
+                !pane.startsWith("https://") &&
+                (host.isEmpty() || !pane.lowercase().contains(host))) {
+                return pane
+            }
+        }
+        val count = node.childCount.coerceAtMost(40)
+        for (i in 0 until count) {
+            val child = node.getChild(i) ?: continue
+            val r = findPaneTitle(child, host, depth + 1, maxDepth)
+            child.recycle()
+            if (r.isNotEmpty()) return r
+        }
+        return ""
+    }
+
+    private fun scanForPlausibleTitle(
+        node: AccessibilityNodeInfo?,
+        host: String,
+        url: String,
+        depth: Int,
+        maxDepth: Int,
+    ): String {
+        if (node == null || depth > maxDepth) return ""
+
+        // Skip the URL-bar subtree entirely — we know its text is the
+        // URL itself, so descending it just produces noise.
+        val viewId = node.viewIdResourceName?.lowercase().orEmpty()
+        val isUrlBar = viewId.contains("url_bar") ||
+            viewId.contains("omnibox") ||
+            viewId.contains("location_bar") ||
+            viewId.contains("mozac_browser_toolbar")
+        if (!isUrlBar) {
+            val text = node.text?.toString()?.trim().orEmpty()
+            if (isPlausibleTitle(text, host, url)) return text
+        }
+
+        val count = node.childCount.coerceAtMost(40)
+        for (i in 0 until count) {
+            val child = node.getChild(i) ?: continue
+            val r = scanForPlausibleTitle(child, host, url, depth + 1, maxDepth)
+            child.recycle()
+            if (r.isNotEmpty()) return r
+        }
+        return ""
+    }
+
+    private fun isPlausibleTitle(
+        text: String,
+        host: String,
+        url: String,
+    ): Boolean {
+        if (text.length < 10 || text.length > 200) return false
+        if (text.startsWith("http://") || text.startsWith("https://")) return false
+        // Reject the URL itself and any text that contains the host —
+        // that's almost certainly a URL-bar rendering, not a title.
+        val lc = text.lowercase()
+        if (host.isNotEmpty() && lc.contains(host)) return false
+        if (lc == url.lowercase()) return false
+        // Reject text that looks like a breadcrumb of path segments.
+        if (text.count { it == '/' } >= 3 && !text.contains(' ')) return false
+        // Reject common toolbar / button labels that sneak in above the
+        // length threshold — unlikely but cheap to guard.
+        val junkPhrases = listOf(
+            "refresh page", "new incognito tab", "close tab",
+            "back", "forward", "stop loading", "more options",
+        )
+        if (junkPhrases.any { lc == it }) return false
+        return true
     }
 
     /** Throttled Firestore write of diagnostic counters. Force=true bypasses
