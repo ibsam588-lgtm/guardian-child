@@ -4,7 +4,7 @@
 ![Dart](https://img.shields.io/badge/Dart-3.4-0175C2?logo=dart&logoColor=white)
 ![Firebase](https://img.shields.io/badge/Firebase-Firestore%20%7C%20Auth%20%7C%20FCM-FFCA28?logo=firebase&logoColor=black)
 ![Android](https://img.shields.io/badge/Android-API%2026%2B-3DDC84?logo=android&logoColor=white)
-![Version](https://img.shields.io/badge/Version-1.0.16-blue)
+![Version](https://img.shields.io/badge/Version-1.0.17-blue)
 ![CI](https://img.shields.io/github/actions/workflow/status/ibsam588-lgtm/guardian-child/ci.yml?label=CI&logo=githubactions&logoColor=white)
 ![License](https://img.shields.io/badge/License-Proprietary-red)
 
@@ -17,7 +17,8 @@ The **child-device half** of the GuardIan parental-control system. This app is i
 ## Table of Contents
 
 1. [What This App Does](#what-this-app-does)
-2. [Recent Changes — v1.0.16](#recent-changes--v1016)
+2. [Recent Changes — v1.0.17](#recent-changes--v1017)
+3. [Recent Changes — v1.0.16](#recent-changes--v1016)
 3. [Architecture](#architecture)
 4. [Native Services](#native-services)
 5. [Required Permissions](#required-permissions)
