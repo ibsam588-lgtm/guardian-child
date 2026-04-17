@@ -18,9 +18,11 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -282,6 +284,14 @@ class AppBlockedActivity : Activity() {
      * app (and its FlutterEngine) does not need to be running.
      */
     private fun showRequestDialog(pkg: String, appName: String, reason: String) {
+        // Guard against a BadTokenException if the user taps the request
+        // button while the block activity is already finishing (e.g. the
+        // accessibility service fired a launchOver immediately after a
+        // dismiss). AlertDialog.show() throws on a dead activity token.
+        if (isFinishing || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed)) {
+            return
+        }
+
         val isUnblock = reason == REASON_BLOCKED
         val titleText = if (isUnblock) "Ask to unblock $appName" else "Ask for more time on $appName"
         val hint = if (isUnblock)
@@ -289,18 +299,65 @@ class AppBlockedActivity : Activity() {
         else
             "Optional: why do you need more time?"
 
+        // Container lets us stack a minute spinner on top of the note field
+        // for the time-limit case. For the unblock case we hide the spinner
+        // since the request is all-or-nothing — a blocked app is unblocked,
+        // not time-gated.
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 16, 48, 0)
+        }
+
+        // Time selector — only for REASON_LIMIT_REACHED requests.
+        val minuteOptions = listOf(15, 30, 45, 60, 90, 120)
+        val labels = minuteOptions.map { m ->
+            if (m < 60) "$m minutes"
+            else if (m == 60) "1 hour"
+            else "${m / 60} hours${if (m % 60 == 0) "" else " ${m % 60} min"}"
+        }
+        val spinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@AppBlockedActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                labels
+            )
+            setSelection(0)  // default 15 minutes
+        }
+        if (!isUnblock) {
+            val prompt = TextView(this).apply {
+                text = "How much extra time?"
+                setPadding(0, 0, 0, 8)
+                setTextColor(android.graphics.Color.parseColor("#1E293B"))
+            }
+            container.addView(prompt)
+            container.addView(spinner)
+        }
+
         val note = EditText(this).apply {
             setHint(hint)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             maxLines = 4
-            setPadding(32, 32, 32, 32)
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = if (isUnblock) 0 else 24
+            layoutParams = lp
         }
+        container.addView(note)
 
         AlertDialog.Builder(this)
             .setTitle(titleText)
-            .setView(note)
+            .setView(container)
             .setPositiveButton("Send") { _, _ ->
-                submitTimeRequest(pkg, appName, reason, note.text.toString().trim())
+                val minutes = if (isUnblock) 0 else minuteOptions[spinner.selectedItemPosition]
+                submitTimeRequest(
+                    pkg = pkg,
+                    appName = appName,
+                    reason = reason,
+                    childNote = note.text.toString().trim(),
+                    requestedMinutes = minutes,
+                )
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -320,6 +377,7 @@ class AppBlockedActivity : Activity() {
         appName: String,
         reason: String,
         childNote: String,
+        requestedMinutes: Int,
     ) {
         val childId = readChildId()
         val parentUid = readParentUid()
@@ -342,7 +400,6 @@ class AppBlockedActivity : Activity() {
         }
 
         val kind = if (reason == REASON_BLOCKED) "permission" else "time"
-        val requestedMinutes = if (reason == REASON_BLOCKED) 0 else 15
         val expiresAt = Timestamp(
             Timestamp.now().seconds + 10 * 60,  // 10-minute TTL
             0

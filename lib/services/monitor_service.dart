@@ -54,6 +54,7 @@ class MonitorService extends ChangeNotifier {
   Timer? _commsTimer;
   Timer? _installedAppsTimer;
   Timer? _browserSyncTimer;
+  Timer? _browserPruneTimer;
   Timer? _frequentEnforcementTimer;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
   StreamSubscription? _commandsSubscription;
@@ -145,6 +146,15 @@ class MonitorService extends ChangeNotifier {
       unawaited(_syncBrowserHistory(childId));
     });
 
+    // Prune browser history older than 48 hours. Runs on start and then
+    // once an hour — much cheaper than pruning on every write, and the
+    // parent UI also filters by visitedAt on read so stale rows never
+    // actually surface even between prunes.
+    unawaited(_pruneBrowserHistory(childId));
+    _browserPruneTimer = Timer.periodic(const Duration(hours: 1), (_) {
+      unawaited(_pruneBrowserHistory(childId));
+    });
+
     // Sync communications once on start
     unawaited(_reportCommunications(childId));
 
@@ -172,6 +182,7 @@ class MonitorService extends ChangeNotifier {
     _commsTimer?.cancel();
     _installedAppsTimer?.cancel();
     _browserSyncTimer?.cancel();
+    _browserPruneTimer?.cancel();
     _frequentEnforcementTimer?.cancel();
     _positionSubscription?.cancel();
     _commandsSubscription?.cancel();
@@ -517,6 +528,37 @@ class MonitorService extends ChangeNotifier {
       debugPrint('BrowserSync error: ${e.message}');
     } catch (e) {
       debugPrint('BrowserSync error: $e');
+    }
+  }
+
+  /// Deletes per-visit browser_history documents older than 48 hours.
+  /// The parent UI also filters by visitedAt on read, so this prune is
+  /// housekeeping — stale rows never surface in the UI even before this
+  /// runs. Kept cheap: single inequality query, small batched delete.
+  Future<void> _pruneBrowserHistory(String childId) async {
+    if (childId.isEmpty) return;
+    try {
+      final cutoff =
+          Timestamp.fromDate(DateTime.now().subtract(const Duration(hours: 48)));
+      final snap = await _db
+          .collection('children')
+          .doc(childId)
+          .collection('browser_history')
+          .where('visitedAt', isLessThan: cutoff)
+          .limit(200) // bounded so a backlog doesn't hammer quota
+          .get();
+      if (snap.docs.isEmpty) return;
+      final batch = _db.batch();
+      for (final doc in snap.docs) {
+        // Preserve the legacy "recent" summary doc — it has no visitedAt
+        // and the query wouldn't match it, but guard explicitly.
+        if (doc.id == 'recent') continue;
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+      debugPrint('BrowserPrune: removed ${snap.docs.length} expired entries');
+    } catch (e) {
+      debugPrint('BrowserPrune error: $e');
     }
   }
 
