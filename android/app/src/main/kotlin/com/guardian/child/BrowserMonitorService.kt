@@ -727,8 +727,25 @@ class BrowserMonitorService : AccessibilityService() {
     private fun looksLikeUrl(text: String): Boolean {
         if (text.isBlank() || text.length < 4) return false
         if (text.contains(' ')) return false
+        // Reject transient placeholder strings that Chrome and friends
+        // display in the URL-bar TextView during navigation. These
+        // contain dots and no spaces so the weak heuristic below would
+        // otherwise accept them — we've seen hundreds of
+        // 'url: "Loading..."' docs in Firestore from this bug.
+        val lc = text.lowercase().trimEnd('.', '…', ' ')
+        if (lc == "loading" ||
+            lc == "connecting" ||
+            lc == "reconnecting" ||
+            lc == "waiting for" ||
+            lc == "finishing" ||
+            lc == "redirecting") {
+            return false
+        }
         // Either has a scheme, or a dot with no whitespace (e.g. "example.com/foo")
         if (text.startsWith("http://") || text.startsWith("https://")) return true
+        // Require a letter in the domain-shaped token so literal
+        // punctuation like '...' or '-.-' is also rejected.
+        if (!text.any { it.isLetter() }) return false
         return text.contains('.')
     }
 
