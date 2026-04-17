@@ -1,6 +1,7 @@
 package com.guardian.child
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,15 +12,21 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import com.google.firebase.FirebaseApp
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.FirebaseFirestore
 
 class AppBlockedActivity : Activity() {
 
@@ -209,20 +216,12 @@ class AppBlockedActivity : Activity() {
                 background = roundedBg(Color.parseColor("#3B82F6"))
                 setPadding(48, 24, 48, 24)
                 setOnClickListener {
-                    val launch = packageManager.getLaunchIntentForPackage(this@AppBlockedActivity.packageName)
-                    if (launch != null) {
-                        launch.addFlags(
-                            Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        )
-                        launch.putExtra("route", "/time-request")
-                        launch.putExtra(EXTRA_PACKAGE_NAME, blockedPackage)
-                        launch.putExtra(EXTRA_APP_NAME, appName)
-                        launch.putExtra(EXTRA_REASON, reason)
-                        startActivity(launch)
-                    }
-                    finish()
+                    // Show the request form inline inside the block overlay.
+                    // Previously this relaunched the Guardian Child app with
+                    // a deep-link route, which yanked the child out of the
+                    // block screen entirely — clunky UX and unnecessary since
+                    // the request is just a single Firestore write.
+                    showRequestDialog(blockedPackage, appName, reason)
                 }
             }
             layout.addView(askBtn, buttonParams())
@@ -274,5 +273,140 @@ class AppBlockedActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         // Prevent dismissing the block screen via back button
+    }
+
+    /**
+     * Inline unblock / extra-time request. We build a one-field dialog
+     * right on top of the block screen so the child never leaves this
+     * activity. The submission goes straight to Firestore — the child
+     * app (and its FlutterEngine) does not need to be running.
+     */
+    private fun showRequestDialog(pkg: String, appName: String, reason: String) {
+        val isUnblock = reason == REASON_BLOCKED
+        val titleText = if (isUnblock) "Ask to unblock $appName" else "Ask for more time on $appName"
+        val hint = if (isUnblock)
+            "Optional: why do you want this unblocked?"
+        else
+            "Optional: why do you need more time?"
+
+        val note = EditText(this).apply {
+            setHint(hint)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            maxLines = 4
+            setPadding(32, 32, 32, 32)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(titleText)
+            .setView(note)
+            .setPositiveButton("Send") { _, _ ->
+                submitTimeRequest(pkg, appName, reason, note.text.toString().trim())
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /**
+     * Writes a timeRequests doc the parent's home-screen listener picks
+     * up. Fields match what TimeRequestService expects so the same
+     * approve/deny dialog renders without special-casing the source.
+     *
+     * kind = "permission" for blocked-app unblock requests (so a parent
+     * approval flips appLimits/{pkg}.isBlocked back to false permanently),
+     * or "time" for an extra-minutes top-up on a limit-reached app.
+     */
+    private fun submitTimeRequest(
+        pkg: String,
+        appName: String,
+        reason: String,
+        childNote: String,
+    ) {
+        val childId = readChildId()
+        val parentUid = readParentUid()
+        if (childId.isBlank() || parentUid.isBlank()) {
+            Toast.makeText(
+                this,
+                "Can't send right now — device not paired. Open Guardian Child and try again.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        // Ensure Firebase is initialised in this process. AppBlockedActivity
+        // can be launched by the accessibility service before the main
+        // FirebaseInitProvider has run on some OEMs.
+        try { FirebaseApp.getInstance() } catch (_: IllegalStateException) {
+            try { FirebaseApp.initializeApp(applicationContext) } catch (e: Exception) {
+                Log.w(TAG, "Firebase init failed: ${e.message}")
+            }
+        }
+
+        val kind = if (reason == REASON_BLOCKED) "permission" else "time"
+        val requestedMinutes = if (reason == REASON_BLOCKED) 0 else 15
+        val expiresAt = Timestamp(
+            Timestamp.now().seconds + 10 * 60,  // 10-minute TTL
+            0
+        )
+
+        val childName = readChildName().ifBlank { "Your child" }
+        val payload = hashMapOf<String, Any>(
+            "parentUid" to parentUid,
+            "childId" to childId,
+            "childName" to childName,
+            "appName" to appName,
+            "packageName" to pkg,
+            "requestedMinutes" to requestedMinutes,
+            "childNote" to childNote,
+            "kind" to kind,
+            "status" to "pending",
+            "createdAt" to Timestamp.now(),
+            "expiresAt" to expiresAt,
+        )
+
+        FirebaseFirestore.getInstance()
+            .collection("timeRequests")
+            .add(payload)
+            .addOnSuccessListener {
+                Toast.makeText(
+                    this,
+                    if (kind == "permission")
+                        "Unblock request sent to your parent."
+                    else
+                        "Request sent — ask your parent to approve.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            .addOnFailureListener { e ->
+                Log.w(TAG, "submitTimeRequest failed: ${e.message}")
+                Toast.makeText(
+                    this,
+                    "Couldn't send request: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+    }
+
+    private fun readChildId(): String {
+        return try {
+            val sp = applicationContext.getSharedPreferences(
+                "FlutterSharedPreferences", Context.MODE_PRIVATE)
+            sp.getString("flutter.paired_child_id", null).orEmpty()
+        } catch (_: Exception) { "" }
+    }
+
+    private fun readParentUid(): String {
+        return try {
+            val sp = applicationContext.getSharedPreferences(
+                "FlutterSharedPreferences", Context.MODE_PRIVATE)
+            sp.getString("flutter.paired_parent_uid", null).orEmpty()
+        } catch (_: Exception) { "" }
+    }
+
+    private fun readChildName(): String {
+        return try {
+            val sp = applicationContext.getSharedPreferences(
+                "FlutterSharedPreferences", Context.MODE_PRIVATE)
+            sp.getString("flutter.paired_child_name", null).orEmpty()
+        } catch (_: Exception) { "" }
     }
 }

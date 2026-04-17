@@ -103,12 +103,12 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
         'timestamp': FieldValue.serverTimestamp(),
       }));
 
-      // Play the local siren on the child device so it's audible to people
-      // nearby. Best effort — do not fail the SOS if this throws.
-      try {
-        await const MethodChannel('com.guardian.child/monitor')
-            .invokeMethod('playSiren');
-      } catch (_) {/* ignore — siren is optional */}
+      // Note: we intentionally do NOT trigger the local siren on the
+      // child's own phone here. A child pressing SOS wants discreet help,
+      // not to announce themselves to whoever is near them. The siren is
+      // a parent-initiated command (`siren` in child_commands) — the
+      // parent can trigger it explicitly from the emergency screen if
+      // they decide audible escalation is appropriate.
 
       if (!mounted) return;
       setState(() { _sending = false; _sent = true; });
