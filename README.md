@@ -45,6 +45,21 @@ Once paired to a parent account via a 6-digit code, this app:
 
 ## Recent Changes — v1.0.16
 
+Follow-on fixes from live-Firestore-driven investigation.
+
+| # | Area | Change |
+|---|------|--------|
+| Comms | SMS | Query Inbox, Sent, Outbox URIs explicitly and merge with dedup. `Telephony.Sms.CONTENT_URI` returns inbox-only on modern Samsung One UI unless the caller is the default SMS app — confirmed via live Firestore that only `type='received'` rows were being captured |
+| Comms | Window | Call log + SMS queries widened from 24h to 7 days so the parent card (also 7-day) isn't empty on days the child had no recent activity |
+| Comms | Call types | Added `VOICEMAIL_TYPE` and `BLOCKED_TYPE` to the call-type mapping so those don't fall through to `unknown` |
+| Browser | Google Widget | `com.google.android.googlequicksearchbox` + Samsung Finder now have a dedicated fast-path that captures the typed query directly from the EditText and synthesizes a `google.com/search?q=` URL |
+| Browser | Edge | Expanded Microsoft Edge URL-bar IDs (`omnibox_text`, `search_box_text`) |
+| Browser | Firefox | Expanded Fenix IDs (`mozac_browser_toolbar_edit_url_view`, `awesome_bar_edit_text`, `toolbar_wrapper`) + URL-empty fallback writes a browser_history entry from pageTitle / titleQuery when URL extraction fails |
+
+---
+
+## Recent Changes — v1.0.15
+
 Runtime bug-fix arc v1.0.7 through v1.0.15, investigated against live Firestore data.
 
 | # | Area | Change |
