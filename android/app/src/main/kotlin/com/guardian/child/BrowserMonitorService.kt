@@ -171,7 +171,8 @@ class BrowserMonitorService : AccessibilityService() {
         if (packageName !in BROWSER_PACKAGES) return
 
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
-            event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+            event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) return
 
         eventsSeen += 1
         lastBrowserPkg = packageName
@@ -189,20 +190,40 @@ class BrowserMonitorService : AccessibilityService() {
             // system browser. Capture the typed text directly as a
             // search query so the parent sees what was searched even
             // though no real URL ever renders in this app.
+            //
+            // Gated to TYPE_VIEW_TEXT_CHANGED (user typing) — not the
+            // generic WINDOW_CONTENT_CHANGED ticks that fire constantly
+            // while the widget is open, each of which was previously
+            // triggering a new write with whatever text happened to be
+            // in any EditText at that instant. That was one cause of
+            // the 'browser activity is broke now' regression after
+            // v1.0.16 — stale or empty scans from the widget were
+            // queuing synthetic entries.
             if (packageName == "com.google.android.googlequicksearchbox" ||
                 packageName == "com.samsung.android.app.galaxyfinder") {
+                val isTextChange =
+                    event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+                if (!isTextChange) {
+                    rootNode.recycle()
+                    writeDiagnosticStatus()
+                    return
+                }
                 val query = extractSearchBoxText(rootNode)
                 rootNode.recycle()
-                if (query.isNotEmpty() && query != lastUrl) {
+                // Require a query that looks like a real search (>=3
+                // chars, has a letter) so keystroke-by-keystroke
+                // scraps ('a', 'ap', 'app') don't each get written.
+                val lastPref = prefs?.getString("last_widget_query", "") ?: ""
+                val looksLikeSearch =
+                    query.length >= 3 && query.any { it.isLetter() }
+                if (looksLikeSearch && query != lastPref && query != lastUrl) {
                     lastUrl = query
                     urlsCaptured += 1
-                    // Synthesize a URL so the parent-side UI still has
-                    // something to deduplicate against. The searchQuery
-                    // field is the meaningful one.
                     val synthetic =
                         "https://www.google.com/search?q=" +
                             java.net.URLEncoder.encode(query, "UTF-8")
                     prefs?.edit()
+                        ?.putString("last_widget_query", query)
                         ?.putString("last_url", synthetic)
                         ?.putLong("last_url_time", System.currentTimeMillis())
                         ?.putString("last_browser", packageName)
@@ -252,39 +273,18 @@ class BrowserMonitorService : AccessibilityService() {
             rootNode.recycle()
 
             if (url.isEmpty() || url == lastUrl) {
-                // Special case: URL extraction failed (common on Firefox
-                // Fenix, where the toolbar shows only the site name
-                // after a tap-out) but we DID capture a page-title or
-                // search-title. Write a synthetic entry so the parent
-                // still sees something. The user's test confirmed this
-                // shape: 'extraction diagnostics' had Firefox results
-                // but rows didn't — because the url-empty branch
-                // bailed before any entry could be queued.
-                if (url.isEmpty() && (pageTitle.isNotEmpty() || titleQuery.isNotEmpty())) {
-                    // De-dupe on whichever text we actually have.
-                    val synthKey = if (titleQuery.isNotEmpty()) titleQuery else pageTitle
-                    if (synthKey != lastUrl) {
-                        lastUrl = synthKey
-                        urlsCaptured += 1
-                        // Synthesize a URL so the row has a link target.
-                        // If titleQuery looks like a real search term,
-                        // route through google as a best-guess; otherwise
-                        // just use a placeholder that the UI will swap
-                        // out for pageTitle.
-                        val synthetic = if (titleQuery.isNotEmpty()) {
-                            "https://www.google.com/search?q=" +
-                                java.net.URLEncoder.encode(titleQuery, "UTF-8")
-                        } else {
-                            "about:blank"
-                        }
-                        writeUrlToFirestore(
-                            synthetic,
-                            packageName,
-                            titleFallback = titleQuery,
-                            pageTitle = pageTitle,
-                        )
-                    }
-                }
+                // Previously we synthesized a 'google.com/search?q=...'
+                // or 'about:blank' entry when URL extraction failed but
+                // pageTitle/titleQuery captured something. That caused
+                // every transient empty-URL event (VERY common between
+                // navigations on every browser, not just Firefox) to
+                // queue a synthetic entry — flooding browser_history
+                // with duplicate-per-keystroke garbage and breaking
+                // the whole Browser Activity tab. Reverted. The
+                // Firefox-diagnostic-but-not-rendered case will need
+                // a different fix (likely: only synthesize when the
+                // page TITLE has been stable across N consecutive
+                // reads, not on every empty-URL tick).
                 writeDiagnosticStatus()
                 return
             }
