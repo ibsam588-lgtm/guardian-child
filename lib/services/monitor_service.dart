@@ -13,6 +13,12 @@ class AppLimitInfo {
   final String packageName;
   final String appName;
   final int dailyLimitMinutes;
+  /// Minutes used today — populated from the appLimits doc's
+  /// `dailyUsageMinutes` field, which the child's _reportAppUsage
+  /// stamps every sync cycle. Child UI reads this to show progress.
+  /// Defaults to 0 when the field is missing (e.g. before the first
+  /// usage sync of the day).
+  final int dailyUsageMinutes;
   final bool isEnabled;
   final bool isBlocked;
   final bool allowTimeRequests;
@@ -21,6 +27,7 @@ class AppLimitInfo {
     required this.packageName,
     required this.appName,
     required this.dailyLimitMinutes,
+    required this.dailyUsageMinutes,
     required this.isEnabled,
     required this.isBlocked,
     required this.allowTimeRequests,
@@ -28,6 +35,7 @@ class AppLimitInfo {
 
   factory AppLimitInfo.fromMap(Map<String, dynamic> d) {
     final dailyLimit = d['dailyLimitMinutes'] as int? ?? 60;
+    final dailyUsed = (d['dailyUsageMinutes'] as num?)?.toInt() ?? 0;
     final isEnabled = d['isEnabled'] as bool? ?? true;
     // Explicit isBlocked field only. The legacy '(isEnabled &&
     // dailyLimit == 0)' fallback caused apps with a freshly-approved
@@ -40,6 +48,7 @@ class AppLimitInfo {
       packageName: d['packageName'] as String? ?? '',
       appName: d['appName'] as String? ?? '',
       dailyLimitMinutes: dailyLimit,
+      dailyUsageMinutes: dailyUsed,
       isEnabled: isEnabled,
       isBlocked: isBlocked,
       allowTimeRequests: d['allowTimeRequests'] as bool? ?? true,
@@ -66,7 +75,22 @@ class MonitorService extends ChangeNotifier {
   StreamSubscription? _syncAppsSubscription;
   StreamSubscription<Position>? _positionSubscription;
   List<AppLimitInfo> _appLimits = [];
+
+  /// Full list used by the enforcement loop (includes disabled apps
+  /// because they still need to be considered on listen — e.g. the
+  /// enforcement code checks isBlocked independent of isEnabled).
   List<AppLimitInfo> get appLimits => _appLimits;
+
+  /// Filtered view for UI rendering. Apps that have been
+  /// unblocked and have their time limit disabled by the parent
+  /// (isBlocked:false && isEnabled:false) are hidden entirely —
+  /// user feedback: 'when they are disabled from guard app they
+  /// shouldn't appear in child app'. Still-active apps (time limit
+  /// on or hard-blocked) remain visible so the child can see
+  /// their daily budget or request unblocks.
+  List<AppLimitInfo> get appLimitsForUi => _appLimits
+      .where((l) => l.isEnabled || l.isBlocked)
+      .toList(growable: false);
 
   bool _isRunning = false;
   String _lastLocation = 'Unknown';
