@@ -29,9 +29,13 @@ class AppLimitInfo {
   factory AppLimitInfo.fromMap(Map<String, dynamic> d) {
     final dailyLimit = d['dailyLimitMinutes'] as int? ?? 60;
     final isEnabled = d['isEnabled'] as bool? ?? true;
-    // Prefer the explicit 'isBlocked' field written by the parent app;
-    // fall back to the implicit rule: enabled with a zero-minute daily limit.
-    final isBlocked = d['isBlocked'] as bool? ?? (isEnabled && dailyLimit == 0);
+    // Explicit isBlocked field only. The legacy '(isEnabled &&
+    // dailyLimit == 0)' fallback caused apps with a freshly-approved
+    // unblock (isBlocked: false, dailyLimit: 0) to be treated as
+    // hard-blocks by the child enforcement loop — an explicit unblock
+    // never took effect on the device. Missing field now means
+    // not-blocked.
+    final isBlocked = d['isBlocked'] as bool? ?? false;
     return AppLimitInfo(
       packageName: d['packageName'] as String? ?? '',
       appName: d['appName'] as String? ?? '',
@@ -80,11 +84,35 @@ class MonitorService extends ChangeNotifier {
   /// location tick that happens to fall inside a zone.
   final Set<String> _fencesCurrentlyInside = {};
 
+  /// Last time we fired an "outside" reminder for each fence. Keyed by
+  /// fence id → millis since epoch. Used by the repeat-while-outside
+  /// feature: once a child leaves a zone, we re-write an alert every
+  /// minute so the parent keeps getting pings. Cleared on re-entry.
+  final Map<String, int> _lastOutsideAlertTs = {};
+
+  /// Minimum gap between repeated "still outside" alerts per fence.
+  /// User-requested cadence: 'alerts should go out every 1 if the
+  /// location is outside the geo fence zone'.
+  static const Duration _repeatOutsideInterval = Duration(minutes: 1);
+
   /// Seeded true on [start] — we suppress alerts on the very first
   /// position evaluation since we haven't established a baseline yet
   /// (otherwise restarting the app while outside a zone would fire a
   /// spurious "exited" alert even though nothing changed).
   bool _geofenceBaselineNeeded = true;
+
+  /// Most recent accepted position, cached so the repeat-while-outside
+  /// timer can re-evaluate geofences even when the child is stationary
+  /// (the native location stream only ticks on movement).
+  double? _lastLat;
+  double? _lastLng;
+
+  /// Timer that re-runs geofence evaluation every 30s regardless of
+  /// movement, so the repeat-while-outside alerts actually fire for a
+  /// stationary child. The cadence is tighter than the per-fence
+  /// 60s-repeat floor so we don't miss the window when the minute
+  /// boundary is crossed between movement-triggered evaluations.
+  Timer? _geofenceRepeatTimer;
 
   /// Returns today's date as yyyy-MM-dd for document IDs
   String get _todayDocId {
@@ -134,6 +162,18 @@ class MonitorService extends ChangeNotifier {
     _listenToCommands(childId);
     _listenForSyncAppsCommand(childId);
     _listenToGeoFences(childId);
+
+    // Repeat geofence evaluation every 30s regardless of movement, so
+    // a stationary child outside a zone still triggers the 1-minute
+    // repeat-alert cadence. If no last position has been cached yet,
+    // the tick no-ops.
+    _geofenceRepeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      final lat = _lastLat;
+      final lng = _lastLng;
+      if (lat != null && lng != null) {
+        _evaluateGeofences(childId, lat, lng);
+      }
+    });
 
     // Sync installed apps once on start, then every 10 minutes
     unawaited(_syncInstalledApps(childId));
@@ -194,6 +234,7 @@ class MonitorService extends ChangeNotifier {
     _browserSyncTimer?.cancel();
     _browserPruneTimer?.cancel();
     _commsPruneTimer?.cancel();
+    _geofenceRepeatTimer?.cancel();
     _frequentEnforcementTimer?.cancel();
     _positionSubscription?.cancel();
     _commandsSubscription?.cancel();
@@ -201,6 +242,9 @@ class MonitorService extends ChangeNotifier {
     _limitsSubscription?.cancel();
     _fenceSubscription?.cancel();
     _fencesCurrentlyInside.clear();
+    _lastOutsideAlertTs.clear();
+    _lastLat = null;
+    _lastLng = null;
     _geofenceBaselineNeeded = true;
     _activeFences = [];
     _isRunning = false;
@@ -1006,6 +1050,9 @@ class MonitorService extends ChangeNotifier {
   /// inside-set — no alerts on startup, otherwise restarting outside a
   /// zone would always fire a fake "exited" alert.
   void _evaluateGeofences(String childId, double lat, double lng) {
+    // Cache so the stationary-repeat timer has something to work with.
+    _lastLat = lat;
+    _lastLng = lng;
     if (_activeFences.isEmpty) {
       _geofenceBaselineNeeded = false;
       return;
@@ -1032,17 +1079,44 @@ class MonitorService extends ChangeNotifier {
       final fence = _activeFences.firstWhere((f) => f.id == id,
           orElse: () => _GeoFenceRecord.missing(id));
       unawaited(_writeFenceAlert(childId, fence, entered: true, lat: lat, lng: lng));
+      // Entering a zone clears any outside-repeat cadence for it so
+      // a subsequent exit starts a fresh 60s clock.
+      _lastOutsideAlertTs.remove(id);
     }
     // Exit transitions: ids in previous set that are no longer present.
     for (final id in _fencesCurrentlyInside.difference(nowInside)) {
       final fence = _activeFences.firstWhere((f) => f.id == id,
           orElse: () => _GeoFenceRecord.missing(id));
       unawaited(_writeFenceAlert(childId, fence, entered: false, lat: lat, lng: lng));
+      _lastOutsideAlertTs[id] = DateTime.now().millisecondsSinceEpoch;
     }
 
     _fencesCurrentlyInside
       ..clear()
       ..addAll(nowInside);
+
+    // Repeat "still outside" alerts every _repeatOutsideInterval for
+    // each fence the child is NOT currently inside. Same alert type
+    // and doc shape as the initial exit — parent treats them
+    // identically. Separate timestamp per fence so the cadences don't
+    // synchronise and double-fire.
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    for (final fence in _activeFences) {
+      if (nowInside.contains(fence.id)) continue;
+      final last = _lastOutsideAlertTs[fence.id];
+      if (last == null) continue;
+      if (nowMs - last >= _repeatOutsideInterval.inMilliseconds) {
+        _lastOutsideAlertTs[fence.id] = nowMs;
+        unawaited(_writeFenceAlert(
+          childId,
+          fence,
+          entered: false,
+          lat: lat,
+          lng: lng,
+          isRepeat: true,
+        ));
+      }
+    }
   }
 
   /// Write an alert doc that the parent app surfaces on the Alerts tab
@@ -1053,6 +1127,7 @@ class MonitorService extends ChangeNotifier {
     required bool entered,
     required double lat,
     required double lng,
+    bool isRepeat = false,
   }) async {
     try {
       // Look up parentUid from the child doc so the alert is correctly
@@ -1067,8 +1142,15 @@ class MonitorService extends ChangeNotifier {
       final type = entered ? 'geofence_enter' : 'geofence_exit';
       final childName = childSnap.data()?['name'] as String? ?? 'Your child';
       final verb = entered ? 'entered' : 'left';
-      final title = '$childName $verb ${fence.name}';
-      final message = '$childName has $verb the "${fence.name}" zone.';
+      // For repeating "still outside" reminders, use clearer parent-
+      // facing copy so they don't think they're getting duplicates of
+      // the original exit notification.
+      final title = isRepeat
+          ? '$childName is still outside ${fence.name}'
+          : '$childName $verb ${fence.name}';
+      final message = isRepeat
+          ? '$childName has not returned to the "${fence.name}" zone yet.'
+          : '$childName has $verb the "${fence.name}" zone.';
       await _db.collection('alerts').add({
         'parentUid': parentUid,
         'childId': childId,
@@ -1077,11 +1159,13 @@ class MonitorService extends ChangeNotifier {
         'message': message,
         'fenceId': fence.id,
         'fenceName': fence.name,
+        'isRepeat': isRepeat,
         'lat': lat,
         'lng': lng,
         'timestamp': FieldValue.serverTimestamp(),
       });
-      debugPrint('GeoFence: alert written — $type for ${fence.name}');
+      debugPrint(
+          'GeoFence: alert written — $type for ${fence.name}${isRepeat ? ' [repeat]' : ''}');
 
       // Also post a local notification on the child's own phone. The
       // parent gets an FCM push via the onGeofenceAlert cloud function
@@ -1089,14 +1173,14 @@ class MonitorService extends ChangeNotifier {
       // local channel notification so they're aware they've crossed a
       // zone boundary without relying on any round-trip to Firebase.
       try {
-        // Use a child-facing phrasing — the parent notification refers
-        // to "your child", but on the child's phone that reads wrong.
-        final childFacingTitle = entered
-            ? 'Entered ${fence.name}'
-            : 'Left ${fence.name}';
-        final childFacingBody = entered
-            ? 'You entered the "${fence.name}" zone. Your parent has been notified.'
-            : 'You left the "${fence.name}" zone. Your parent has been notified.';
+        final childFacingTitle = isRepeat
+            ? 'Still outside ${fence.name}'
+            : (entered ? 'Entered ${fence.name}' : 'Left ${fence.name}');
+        final childFacingBody = isRepeat
+            ? 'You\'re still outside the "${fence.name}" zone. Your parent has been notified.'
+            : (entered
+                ? 'You entered the "${fence.name}" zone. Your parent has been notified.'
+                : 'You left the "${fence.name}" zone. Your parent has been notified.');
         await _channel.invokeMethod<void>('showGeofenceNotification', {
           'title': childFacingTitle,
           'body': childFacingBody,
