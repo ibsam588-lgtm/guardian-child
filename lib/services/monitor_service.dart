@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -65,6 +66,24 @@ class MonitorService extends ChangeNotifier {
   String _lastLocation = 'Unknown';
   String get lastLocation => _lastLocation;
 
+  // ── Geofence enforcement state ────────────────────────────────────────
+  /// Active geofences the parent has defined for this child. Refreshed via
+  /// a Firestore snapshot listener so adds/edits/deletes apply immediately
+  /// without waiting for the next location tick.
+  List<_GeoFenceRecord> _activeFences = [];
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _fenceSubscription;
+
+  /// Set of fence IDs the child is currently inside, so we can detect
+  /// enter/exit transitions rather than spamming an alert on every
+  /// location tick that happens to fall inside a zone.
+  final Set<String> _fencesCurrentlyInside = {};
+
+  /// Seeded true on [start] — we suppress alerts on the very first
+  /// position evaluation since we haven't established a baseline yet
+  /// (otherwise restarting the app while outside a zone would fire a
+  /// spurious "exited" alert even though nothing changed).
+  bool _geofenceBaselineNeeded = true;
+
   /// Returns today's date as yyyy-MM-dd for document IDs
   String get _todayDocId {
     final now = DateTime.now();
@@ -112,6 +131,7 @@ class MonitorService extends ChangeNotifier {
     _listenToAppLimits(childId);
     _listenToCommands(childId);
     _listenForSyncAppsCommand(childId);
+    _listenToGeoFences(childId);
 
     // Sync installed apps once on start, then every 10 minutes
     unawaited(_syncInstalledApps(childId));
@@ -157,6 +177,10 @@ class MonitorService extends ChangeNotifier {
     _commandsSubscription?.cancel();
     _syncAppsSubscription?.cancel();
     _limitsSubscription?.cancel();
+    _fenceSubscription?.cancel();
+    _fencesCurrentlyInside.clear();
+    _geofenceBaselineNeeded = true;
+    _activeFences = [];
     _isRunning = false;
     _stopForegroundService();
   }
@@ -242,6 +266,12 @@ class MonitorService extends ChangeNotifier {
 
       notifyListeners();
       debugPrint('Location update (movement): $locationStr');
+
+      // After every accepted location update, evaluate geofence transitions
+      // so enter/exit alerts fire on the child device itself instead of
+      // depending on a server-side cron. Guarded by _activeFences being
+      // populated — no fences means no checks.
+      _evaluateGeofences(childId, pos.latitude, pos.longitude);
     } catch (e) {
       debugPrint('writePositionToFirestore error: $e');
     }
@@ -322,6 +352,14 @@ class MonitorService extends ChangeNotifier {
       // Use set(merge:true) — never throws NOT_FOUND if the doc was deleted.
       await _db.collection('children').doc(childId).set(update, SetOptions(merge: true));
       notifyListeners();
+
+      // Also evaluate geofences on the heartbeat path (the 30-second timer
+      // fires even when the child isn't moving enough to trigger the
+      // position stream), so a child that sits still just inside a zone
+      // boundary still gets an exit alert when the GPS drifts.
+      if (lat != null && lng != null && lat.isFinite && lng.isFinite) {
+        _evaluateGeofences(childId, lat, lng);
+      }
     } catch (e) {
       debugPrint('Heartbeat error: $e');
     }
@@ -818,4 +856,180 @@ class MonitorService extends ChangeNotifier {
           (snap) => snap.exists ? snap.data() : null,
         );
   }
+
+  // ── Geofence enforcement ────────────────────────────────────────────────
+  /// Subscribe to the parent-defined geofences for this child and keep
+  /// the local cache current. Inactive fences are dropped immediately so
+  /// we never alert on a zone the parent has toggled off.
+  void _listenToGeoFences(String childId) {
+    _fenceSubscription?.cancel();
+    _fenceSubscription = _db
+        .collection('children')
+        .doc(childId)
+        .collection('geo_fences')
+        .snapshots()
+        .listen((snap) {
+      final fences = <_GeoFenceRecord>[];
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        final active = d['isActive'] as bool? ?? true;
+        if (!active) continue;
+        final lat = (d['lat'] as num?)?.toDouble();
+        final lng = (d['lng'] as num?)?.toDouble();
+        final radius = (d['radiusMeters'] as num?)?.toDouble();
+        if (lat == null || lng == null || radius == null) continue;
+        if (!lat.isFinite || !lng.isFinite || radius <= 0) continue;
+        fences.add(_GeoFenceRecord(
+          id: doc.id,
+          name: d['name'] as String? ?? 'Zone',
+          lat: lat,
+          lng: lng,
+          radiusMeters: radius,
+        ));
+      }
+      _activeFences = fences;
+      // If a fence the child was inside was just deleted or deactivated,
+      // drop it from the inside-set so we don't fire a spurious exit
+      // alert the next time we evaluate.
+      _fencesCurrentlyInside.removeWhere(
+          (id) => _activeFences.every((f) => f.id != id));
+      debugPrint('GeoFence: ${_activeFences.length} active fence(s) loaded');
+    }, onError: (e) {
+      debugPrint('GeoFence subscription error: $e');
+    });
+  }
+
+  /// Compare the current GPS reading against every active fence and fire
+  /// an alert for each enter/exit transition since the last evaluation.
+  /// The first evaluation after [start] is used only to seed the
+  /// inside-set — no alerts on startup, otherwise restarting outside a
+  /// zone would always fire a fake "exited" alert.
+  void _evaluateGeofences(String childId, double lat, double lng) {
+    if (_activeFences.isEmpty) {
+      _geofenceBaselineNeeded = false;
+      return;
+    }
+
+    final nowInside = <String>{};
+    for (final f in _activeFences) {
+      if (_haversineMeters(lat, lng, f.lat, f.lng) <= f.radiusMeters) {
+        nowInside.add(f.id);
+      }
+    }
+
+    if (_geofenceBaselineNeeded) {
+      _fencesCurrentlyInside
+        ..clear()
+        ..addAll(nowInside);
+      _geofenceBaselineNeeded = false;
+      debugPrint('GeoFence: baseline set — inside ${nowInside.length} zone(s)');
+      return;
+    }
+
+    // Enter transitions: ids in nowInside that weren't in the previous set.
+    for (final id in nowInside.difference(_fencesCurrentlyInside)) {
+      final fence = _activeFences.firstWhere((f) => f.id == id,
+          orElse: () => _GeoFenceRecord.missing(id));
+      unawaited(_writeFenceAlert(childId, fence, entered: true, lat: lat, lng: lng));
+    }
+    // Exit transitions: ids in previous set that are no longer present.
+    for (final id in _fencesCurrentlyInside.difference(nowInside)) {
+      final fence = _activeFences.firstWhere((f) => f.id == id,
+          orElse: () => _GeoFenceRecord.missing(id));
+      unawaited(_writeFenceAlert(childId, fence, entered: false, lat: lat, lng: lng));
+    }
+
+    _fencesCurrentlyInside
+      ..clear()
+      ..addAll(nowInside);
+  }
+
+  /// Write an alert doc that the parent app surfaces on the Alerts tab
+  /// and that Cloud Functions convert into an FCM push.
+  Future<void> _writeFenceAlert(
+    String childId,
+    _GeoFenceRecord fence, {
+    required bool entered,
+    required double lat,
+    required double lng,
+  }) async {
+    try {
+      // Look up parentUid from the child doc so the alert is correctly
+      // scoped — the Alerts tab filters by parentUid == auth.uid.
+      final childSnap = await _db.collection('children').doc(childId).get();
+      final parentUid = childSnap.data()?['parentUid'] as String? ?? '';
+      if (parentUid.isEmpty) {
+        debugPrint('GeoFence: no parentUid on child doc — skipping alert');
+        return;
+      }
+
+      final type = entered ? 'geofence_enter' : 'geofence_exit';
+      final childName = childSnap.data()?['name'] as String? ?? 'Your child';
+      final verb = entered ? 'entered' : 'left';
+      await _db.collection('alerts').add({
+        'parentUid': parentUid,
+        'childId': childId,
+        'type': type,
+        'title': '$childName $verb ${fence.name}',
+        'message': '$childName has $verb the "${fence.name}" zone.',
+        'fenceId': fence.id,
+        'fenceName': fence.name,
+        'lat': lat,
+        'lng': lng,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+      debugPrint('GeoFence: alert written — $type for ${fence.name}');
+    } catch (e) {
+      debugPrint('GeoFence writeAlert error: $e');
+    }
+  }
+
+  /// Great-circle distance in metres between two lat/lng pairs. Uses the
+  /// haversine formula with the mean Earth radius. Plenty accurate for
+  /// fence checks at the typical 50 m – 1 km radius range.
+  static double _haversineMeters(
+      double lat1, double lng1, double lat2, double lng2) {
+    const earthRadiusM = 6371000.0;
+    final dLat = _toRad(lat2 - lat1);
+    final dLng = _toRad(lng2 - lng1);
+    final sinHalfDLat = math.sin(dLat / 2);
+    final sinHalfDLng = math.sin(dLng / 2);
+    final a = (sinHalfDLat * sinHalfDLat) +
+        math.cos(_toRad(lat1)) *
+            math.cos(_toRad(lat2)) *
+            (sinHalfDLng * sinHalfDLng);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return earthRadiusM * c;
+  }
+
+  static double _toRad(double deg) => deg * math.pi / 180.0;
+}
+
+/// Internal plain-data struct used by the enforcement code. We don't
+/// depend on the parent app's GeoFence model because the child package
+/// doesn't import it — this keeps the two codebases decoupled.
+class _GeoFenceRecord {
+  final String id;
+  final String name;
+  final double lat;
+  final double lng;
+  final double radiusMeters;
+  const _GeoFenceRecord({
+    required this.id,
+    required this.name,
+    required this.lat,
+    required this.lng,
+    required this.radiusMeters,
+  });
+
+  /// Placeholder used when a fence referenced in the inside-set is no
+  /// longer in the active list (edge case: snapshot race between two
+  /// position updates and a fence deletion).
+  factory _GeoFenceRecord.missing(String id) => _GeoFenceRecord(
+        id: id,
+        name: 'Zone',
+        lat: 0,
+        lng: 0,
+        radiusMeters: 0,
+      );
 }
