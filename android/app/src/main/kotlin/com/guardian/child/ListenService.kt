@@ -43,9 +43,13 @@ class ListenService : Service() {
         private const val TAG = "ListenService"
 
         private const val CHUNK_MS: Long = 5_000L          // 5s per chunk
-        private const val MAX_SESSION_MS: Long = 15 * 60_000L // 15min safety TTL
+        private const val MAX_SESSION_MS: Long = 15 * 60_000L // 15min absolute safety TTL
 
         const val EXTRA_CHILD_ID = "childId"
+        /** Requested recording duration in seconds. The service stops itself after
+         *  this many seconds, capped at MAX_SESSION_MS. 0 / negative means unlimited
+         *  (use the 15-minute safety TTL). */
+        const val EXTRA_DURATION_SECONDS = "durationSeconds"
 
         /**
          * Write a status update to children/{childId}/listen_status/current
@@ -72,7 +76,7 @@ class ListenService : Service() {
             }
         }
 
-        fun start(context: Context, childId: String) {
+        fun start(context: Context, childId: String, durationSeconds: Int = 0) {
             // Mic permission must be granted — otherwise Android will
             // kill the foreground service with a SecurityException the
             // moment MediaRecorder tries to start.
@@ -86,6 +90,7 @@ class ListenService : Service() {
             writeStatus(childId, "starting")
             val intent = Intent(context, ListenService::class.java)
                 .putExtra(EXTRA_CHILD_ID, childId)
+                .putExtra(EXTRA_DURATION_SECONDS, durationSeconds)
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
@@ -114,12 +119,14 @@ class ListenService : Service() {
     private var running = false
     private val db by lazy { FirebaseFirestore.getInstance() }
     private var startedAtMs: Long = 0L
+    /** Effective session TTL — set from EXTRA_DURATION_SECONDS (if > 0), else MAX_SESSION_MS. */
+    private var sessionMaxMs: Long = MAX_SESSION_MS
 
     private val rotateChunkRunnable = object : Runnable {
         override fun run() {
             if (!running) return
-            // Enforce TTL
-            if (System.currentTimeMillis() - startedAtMs >= MAX_SESSION_MS) {
+            // Enforce per-session TTL (duration requested by parent, or 15-min safety cap)
+            if (System.currentTimeMillis() - startedAtMs >= sessionMaxMs) {
                 Log.i(TAG, "Session TTL reached — stopping")
                 stopSelf()
                 return
@@ -154,6 +161,16 @@ class ListenService : Service() {
             return START_NOT_STICKY
         }
         childId = id
+
+        // Apply the requested duration as the session TTL, capped at the
+        // absolute safety limit. durationSeconds <= 0 means "use the default".
+        val durationSec = intent?.getIntExtra(EXTRA_DURATION_SECONDS, 0) ?: 0
+        sessionMaxMs = if (durationSec > 0) {
+            minOf(durationSec * 1_000L, MAX_SESSION_MS)
+        } else {
+            MAX_SESSION_MS
+        }
+
         if (!running) {
             running = true
             startedAtMs = System.currentTimeMillis()

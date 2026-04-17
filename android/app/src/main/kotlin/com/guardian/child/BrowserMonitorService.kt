@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.google.firebase.FirebaseApp
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
 import org.json.JSONArray
@@ -137,6 +138,19 @@ class BrowserMonitorService : AccessibilityService() {
         prefs = getSharedPreferences("browser_monitor", MODE_PRIVATE)
         // Reset the dedup guard so we re-capture the current URL after a restart
         lastUrl = ""
+        // Ensure Firebase is initialized in this process before any Firestore access.
+        // The FirebaseInitProvider content-provider normally handles this automatically,
+        // but accessibility services can be bound before the provider has run on some
+        // devices/OEMs, so we guard here explicitly.
+        try {
+            FirebaseApp.getInstance()
+        } catch (_: IllegalStateException) {
+            try {
+                FirebaseApp.initializeApp(applicationContext)
+            } catch (e: Exception) {
+                Log.w(TAG, "Firebase init failed: ${e.message}")
+            }
+        }
         Log.d(TAG, "BrowserMonitorService connected")
         // Emit an initial "connected" status so the parent UI immediately
         // sees the service is up, even before the child opens a browser.
@@ -198,11 +212,72 @@ class BrowserMonitorService : AccessibilityService() {
                 ?.apply()
 
             Log.d(TAG, "Browser URL: $url from $packageName")
+
+            // Write directly to Firestore so history is synced even when the
+            // Flutter app is not running (e.g. the user swiped it from recents
+            // and the Dart polling timers are no longer firing).
+            writeUrlToFirestore(url, packageName)
+
             writeDiagnosticStatus(force = true)
         } catch (e: Exception) {
             Log.e(TAG, "Error reading browser URL", e)
             writeDiagnosticStatus(note = "err:${e.javaClass.simpleName}")
         }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /** Reads the paired child's ID from the Flutter SharedPreferences file.
+     *  Returns null if the device is not yet paired or prefs are inaccessible. */
+    private fun getChildId(): String? {
+        return try {
+            val sp = applicationContext.getSharedPreferences(
+                "FlutterSharedPreferences", Context.MODE_PRIVATE)
+            sp.getString("flutter.paired_child_id", null)?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * Writes the captured URL directly to children/{childId}/browser_history/recent
+     * so history syncs to Firestore even when the Flutter engine is not running.
+     *
+     * Uses a read-modify-write cycle (fire-and-forget) to append to the entries
+     * array and keep it capped at 100 items.
+     */
+    private fun writeUrlToFirestore(url: String, packageName: String) {
+        val childId = getChildId() ?: return
+        val entry = hashMapOf<String, Any>(
+            "url"       to url,
+            "browser"   to packageName,
+            "visitedAt" to Timestamp.now(),
+        )
+        val ref = FirebaseFirestore.getInstance()
+            .collection("children")
+            .document(childId)
+            .collection("browser_history")
+            .document("recent")
+
+        ref.get()
+            .addOnSuccessListener { snap ->
+                @Suppress("UNCHECKED_CAST")
+                val existing = (snap.get("entries") as? List<Map<String, Any>>) ?: emptyList()
+                val merged = (existing + entry).takeLast(100)
+                ref.set(hashMapOf<String, Any>(
+                    "entries"   to merged,
+                    "updatedAt" to Timestamp.now(),
+                )).addOnFailureListener { e ->
+                    Log.w(TAG, "writeUrlToFirestore set failed: ${e.message}")
+                }
+            }
+            .addOnFailureListener { e ->
+                Log.w(TAG, "writeUrlToFirestore get failed — writing fresh doc: ${e.message}")
+                ref.set(hashMapOf<String, Any>(
+                    "entries"   to listOf(entry),
+                    "updatedAt" to Timestamp.now(),
+                )).addOnFailureListener { e2 ->
+                    Log.w(TAG, "writeUrlToFirestore fallback failed: ${e2.message}")
+                }
+            }
     }
 
     /** Throttled Firestore write of diagnostic counters. Force=true bypasses
@@ -212,12 +287,7 @@ class BrowserMonitorService : AccessibilityService() {
         if (!force && now - lastStatusWriteTs < 10_000L) return
         lastStatusWriteTs = now
 
-        val childId = try {
-            val sp = applicationContext.getSharedPreferences(
-                "FlutterSharedPreferences", Context.MODE_PRIVATE)
-            sp.getString("flutter.paired_child_id", null)
-        } catch (e: Exception) { null } ?: return
-        if (childId.isBlank()) return
+        val childId = getChildId() ?: return
 
         try {
             val data = hashMapOf<String, Any>(

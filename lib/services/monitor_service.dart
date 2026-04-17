@@ -778,7 +778,9 @@ class MonitorService extends ChangeNotifier {
 
   // ── Time Requests ─────────────────────────────────────────────────────────
 
-  /// Submit a time extension request from the child to the parent.
+  /// Submit a time extension or permission request from the child to the parent.
+  /// [kind] is either `'time'` (extend daily limit) or `'permission'` (one-off
+  /// permission to use a blocked app). Defaults to `'time'`.
   /// Returns the new Firestore doc ID on success, or null on failure.
   Future<String?> submitTimeRequest({
     required String childId,
@@ -788,6 +790,7 @@ class MonitorService extends ChangeNotifier {
     required String packageName,
     required int requestedMinutes,
     String? childNote,
+    String kind = 'time',
   }) async {
     try {
       final ref = await _db.collection('timeRequests').add({
@@ -798,6 +801,7 @@ class MonitorService extends ChangeNotifier {
         'packageName': packageName,
         'requestedMinutes': requestedMinutes,
         'childNote': childNote ?? '',
+        'kind': kind,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
       });

@@ -9,12 +9,9 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.database.Cursor
-import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.PowerManager
 import android.provider.CallLog
 import android.provider.ContactsContract
@@ -25,16 +22,13 @@ import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import java.io.File
 import java.util.Calendar
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.guardian.child/monitor"
 
-    // ── Audio recording (live-listen) ─────────────────────────────────────────
-    private var mediaRecorder: MediaRecorder? = null
-    private var audioOutputPath: String? = null
-    private val recordingStopHandler = Handler(Looper.getMainLooper())
+    // Audio recording is now handled by ListenService (a dedicated foreground
+    // service) so that mic capture continues when the app is backgrounded.
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -232,8 +226,27 @@ class MainActivity : FlutterActivity() {
                     "startRecording" -> {
                         val durationSeconds = call.argument<Int>("durationSeconds") ?: 60
                         try {
-                            val path = startAudioRecording(durationSeconds)
-                            result.success(path)
+                            // Recording must run inside a foreground service so it
+                            // continues when the app is backgrounded or the activity
+                            // is destroyed. Read the paired childId from the Flutter
+                            // SharedPreferences file (written by the Dart side on login).
+                            val sp = getSharedPreferences(
+                                "FlutterSharedPreferences", Context.MODE_PRIVATE)
+                            val childId = sp.getString("flutter.paired_child_id", "")
+                                ?: ""
+                            if (childId.isBlank()) {
+                                result.error(
+                                    "NO_CHILD_ID",
+                                    "Device not paired — cannot start recording",
+                                    null
+                                )
+                                return@setMethodCallHandler
+                            }
+                            ListenService.start(this, childId, durationSeconds)
+                            // Return a marker so the Dart layer knows recording is
+                            // delegated to the foreground service (chunks go straight
+                            // to Firestore; there is no local file path).
+                            result.success("foreground_service")
                         } catch (e: Exception) {
                             result.error("RECORDING_ERROR", e.message, null)
                         }
@@ -241,8 +254,8 @@ class MainActivity : FlutterActivity() {
 
                     "stopRecording" -> {
                         try {
-                            stopAudioRecording()
-                            result.success(audioOutputPath)
+                            ListenService.stop(this)
+                            result.success(null)
                         } catch (e: Exception) {
                             result.error("RECORDING_ERROR", e.message, null)
                         }
@@ -334,54 +347,6 @@ class MainActivity : FlutterActivity() {
             }
         }
         return lastForegroundPkg
-    }
-
-    // ── Audio recording helpers ───────────────────────────────────────────────
-
-    /** Starts recording from the microphone into an AAC/M4A file.
-     *  Returns the absolute path of the output file. */
-    private fun startAudioRecording(durationSeconds: Int): String {
-        stopAudioRecording() // release any previous session
-
-        val outputFile = File(externalCacheDir ?: cacheDir, "listen_${System.currentTimeMillis()}.m4a")
-        audioOutputPath = outputFile.absolutePath
-
-        mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            MediaRecorder(this)
-        } else {
-            @Suppress("DEPRECATION")
-            MediaRecorder()
-        }.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setAudioSamplingRate(44100)
-            setAudioEncodingBitRate(128_000)
-            setOutputFile(outputFile.absolutePath)
-            prepare()
-            start()
-        }
-
-        // Auto-stop once the requested duration has elapsed
-        recordingStopHandler.removeCallbacksAndMessages(null)
-        recordingStopHandler.postDelayed({
-            stopAudioRecording()
-        }, durationSeconds * 1_000L)
-
-        Log.d("MainActivity", "Recording started: ${outputFile.absolutePath}")
-        return outputFile.absolutePath
-    }
-
-    private fun stopAudioRecording() {
-        recordingStopHandler.removeCallbacksAndMessages(null)
-        try {
-            mediaRecorder?.stop()
-        } catch (_: Exception) { /* already stopped or never started */ }
-        try {
-            mediaRecorder?.release()
-        } catch (_: Exception) {}
-        mediaRecorder = null
-        Log.d("MainActivity", "Recording stopped")
     }
 
     // ── Call log ──────────────────────────────────────────────────────────────
