@@ -223,6 +223,39 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    // Ambient-listening channel methods invoked by the Dart
+                    // CommandService when the parent hits "Listen Live".
+                    // Dart calls `startListen` with {'childId': <id>}; we must
+                    // match that name exactly or the call silently no-ops and
+                    // the parent UI sits on "Connecting…" forever.
+                    "startListen" -> {
+                        val childId = call.argument<String>("childId").orEmpty()
+                        val durationSeconds = call.argument<Int>("durationSeconds") ?: 0
+                        if (childId.isBlank()) {
+                            result.error(
+                                "NO_CHILD_ID",
+                                "startListen called without childId",
+                                null
+                            )
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            ListenService.start(this, childId, durationSeconds)
+                            result.success("foreground_service")
+                        } catch (e: Exception) {
+                            result.error("RECORDING_ERROR", e.message, null)
+                        }
+                    }
+
+                    "stopListen" -> {
+                        try {
+                            ListenService.stop(this)
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("RECORDING_ERROR", e.message, null)
+                        }
+                    }
+
                     "startRecording" -> {
                         val durationSeconds = call.argument<Int>("durationSeconds") ?: 60
                         try {

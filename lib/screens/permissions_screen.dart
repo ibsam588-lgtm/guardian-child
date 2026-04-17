@@ -185,9 +185,20 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         backgroundColor: Colors.transparent,
         foregroundColor: Theme.of(context).colorScheme.onSurface,
       ),
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
+      body: SafeArea(
+        // System nav bar / gesture area was clipping the bottom buttons on
+        // some phones (especially those with thick gesture pills). Wrap in
+        // SafeArea and add explicit MediaQuery-driven bottom inset so the
+        // last button is always reachable regardless of device.
+        top: false,
+        bottom: true,
+        child: SingleChildScrollView(
+          padding: EdgeInsets.only(
+            left: 24.0,
+            right: 24.0,
+            top: 24.0,
+            bottom: 24.0 + MediaQuery.of(context).viewPadding.bottom,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
