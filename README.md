@@ -44,6 +44,18 @@ Once paired to a parent account via a 6-digit code, this app:
 
 ---
 
+## Recent Changes — v1.0.17
+
+| # | Area | Change |
+|---|------|--------|
+| UI filter | Time app screen | `appLimitsForUi` getter hides apps with `isEnabled: false` AND `isBlocked: false`. Parent-disabled apps no longer appear in the child Time app list |
+| Model | AppLimitInfo | Added `dailyUsageMinutes` field read from the appLimits doc's usage stamp. Ready for upcoming progress-bar rendering |
+| Browser regression | URL-empty fallback | Reverted v1.0.16 synthesizer that queued `about:blank` / synthetic-search entries on every empty-URL event. That was flooding browser_history and breaking the Browser Activity tab |
+| Browser | Google widget path | Gated to `TYPE_VIEW_TEXT_CHANGED` only, requires query of 3+ chars containing a letter, dedupes via `last_widget_query` pref |
+| Browser config | accessibility_service_config.xml | Added `typeViewTextChanged` to the event subscription so the hardened widget path actually fires |
+
+---
+
 ## Recent Changes — v1.0.16
 
 Follow-on fixes from live-Firestore-driven investigation.
