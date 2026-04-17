@@ -1,6 +1,9 @@
 package com.guardian.child
 
 import android.app.AppOpsManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.ComponentName
@@ -18,6 +21,7 @@ import android.provider.ContactsContract
 import android.provider.Settings
 import android.provider.Telephony
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -263,6 +267,29 @@ class MainActivity : FlutterActivity() {
                             result.success(null)
                         } catch (e: Exception) {
                             result.error("RECORDING_ERROR", e.message, null)
+                        }
+                    }
+
+                    // Called by Dart _writeFenceAlert when a geofence
+                    // enter/exit transition fires. We post a local
+                    // notification so the child sees the alert directly
+                    // on their phone — not only the parent via FCM.
+                    // User request: 'if childs location is out of the
+                    // geofence it should trigger an alert both to the
+                    // parent and child, system notification basically.'
+                    "showGeofenceNotification" -> {
+                        val title = call.argument<String>("title")
+                            ?: "Geofence alert"
+                        val body = call.argument<String>("body") ?: ""
+                        val transition = call.argument<String>("transition")
+                            ?: "geofence"
+                        try {
+                            showGeofenceLocalNotification(
+                                applicationContext, title, body, transition
+                            )
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("NOTIFY_ERROR", e.message, null)
                         }
                     }
 
@@ -521,6 +548,80 @@ class MainActivity : FlutterActivity() {
             // Security exception or other error — just return null
         }
         return null
+    }
+
+    companion object {
+        private const val GEOFENCE_CHANNEL_ID = "guardian_geofence_channel"
+        private var geofenceNotificationId = 2000
+
+        /**
+         * Post a local notification when the child crosses a geofence
+         * boundary. Fires regardless of FCM / parent-device state so
+         * the child sees immediate feedback on their own phone.
+         */
+        fun showGeofenceLocalNotification(
+            context: Context,
+            title: String,
+            body: String,
+            transition: String,
+        ) {
+            val nm = context.getSystemService(NotificationManager::class.java)
+                ?: return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // High-importance channel — the child should hear / see
+                // this immediately even if their phone is on vibrate.
+                val existing = nm.getNotificationChannel(GEOFENCE_CHANNEL_ID)
+                if (existing == null) {
+                    val channel = NotificationChannel(
+                        GEOFENCE_CHANNEL_ID,
+                        "Geofence alerts",
+                        NotificationManager.IMPORTANCE_HIGH,
+                    ).apply {
+                        description = "Fired when you enter or leave a zone your parent set."
+                        enableVibration(true)
+                        enableLights(true)
+                    }
+                    nm.createNotificationChannel(channel)
+                }
+            }
+
+            // Tapping the notification opens the main app.
+            val launchIntent = context.packageManager
+                .getLaunchIntentForPackage(context.packageName)
+            val contentPi = if (launchIntent != null) {
+                PendingIntent.getActivity(
+                    context,
+                    0,
+                    launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            } else null
+
+            val iconRes = context.applicationInfo.icon.takeIf { it != 0 }
+                ?: android.R.drawable.ic_dialog_map
+
+            val builder = NotificationCompat.Builder(context, GEOFENCE_CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setSmallIcon(iconRes)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+
+            if (contentPi != null) builder.setContentIntent(contentPi)
+
+            try {
+                nm.notify(geofenceNotificationId++, builder.build())
+            } catch (e: SecurityException) {
+                // POST_NOTIFICATIONS not granted on Android 13+ — silent
+                // no-op. The child has to grant that permission during
+                // onboarding for this to fire.
+                Log.w("MainActivity", "geofence notify denied: ${e.message}")
+            }
+        }
     }
 
 }
