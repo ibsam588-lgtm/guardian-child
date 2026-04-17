@@ -436,7 +436,12 @@ class MonitorService extends ChangeNotifier {
       if (currentPkg == null || currentPkg.isEmpty) return;
 
       for (final limit in _appLimits) {
-        if (!limit.isEnabled) continue;
+        // Hard-block check must run regardless of isEnabled. The parent's
+        // "Block app" toggle deliberately sets isEnabled=false (so the
+        // time-limit slider is hidden in the UI) while keeping isBlocked
+        // as the independent enforcement flag. Skipping blocked apps here
+        // would let the child bypass the block by opening the app anyway.
+        if (!limit.isEnabled && !limit.isBlocked) continue;
         final minutesUsed = (raw[limit.packageName] as num?)?.toInt() ?? 0;
         final shouldBlock = limit.isBlocked ||
             (limit.dailyLimitMinutes > 0 && minutesUsed >= limit.dailyLimitMinutes);
