@@ -155,13 +155,19 @@ class _HomeScreenState extends State<HomeScreen> {
             SliverList(
               delegate: SliverChildBuilderDelegate(
                 (ctx, i) {
-                  if (monitor.appLimits.isEmpty) {
+                  // Use the filtered view so apps the parent has
+                  // disabled (isEnabled:false && isBlocked:false)
+                  // don't appear on the child's Time app screen.
+                  // User feedback: 'if they are disabled in guard
+                  // app they shouldn't show up in child app'.
+                  final visible = monitor.appLimitsForUi;
+                  if (visible.isEmpty) {
                     return Padding(
                       padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
                       child: _EmptyLimits(),
                     );
                   }
-                  final limit = monitor.appLimits[i];
+                  final limit = visible[i];
                   return Padding(
                     padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
                     child: _AppLimitCard(
@@ -172,7 +178,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   );
                 },
-                childCount: monitor.appLimits.isEmpty ? 1 : monitor.appLimits.length,
+                childCount: monitor.appLimitsForUi.isEmpty
+                    ? 1
+                    : monitor.appLimitsForUi.length,
               ),
             ),
 
@@ -394,9 +402,29 @@ class _AppLimitCard extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF2D2D2D)),
                 ),
                 Text(
-                  isBlocked ? 'Blocked by parent' : '${limit.dailyLimitMinutes} min / day',
+                  isBlocked
+                      ? 'Blocked by parent'
+                      : '${limit.dailyUsageMinutes} / ${limit.dailyLimitMinutes} min used today',
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
+                if (!isBlocked && limit.dailyLimitMinutes > 0) ...[
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: (limit.dailyUsageMinutes /
+                              limit.dailyLimitMinutes)
+                          .clamp(0.0, 1.0),
+                      minHeight: 4,
+                      backgroundColor: color.withValues(alpha: 0.12),
+                      valueColor: AlwaysStoppedAnimation(
+                        limit.dailyUsageMinutes >= limit.dailyLimitMinutes
+                            ? AppTheme.secondary
+                            : color,
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
