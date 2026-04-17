@@ -199,6 +199,9 @@ class BrowserMonitorService : AccessibilityService() {
             // this is useful context too ('Read a book on Wikipedia'
             // is more informative than 'en.wikipedia.org/wiki/...').
             val pageTitle = findPageTitle(rootNode, url)
+            if (pageTitle.isNotEmpty()) {
+                prefs?.edit()?.putString("last_page_title", pageTitle.take(120))?.apply()
+            }
             rootNode.recycle()
 
             if (url.isEmpty() || url == lastUrl) {
@@ -601,6 +604,16 @@ class BrowserMonitorService : AccessibilityService() {
                 "lastExtractSample" to lastExtractSample,
                 "updatedAt"       to Timestamp.now(),
             )
+            // Surface the most recent title-scan outcome and the most
+            // recent pageTitle captured, so the parent-side
+            // diagnostics can show what the extractor actually saw.
+            // Without this we have no way to tell from the field
+            // whether the extractor ran at all, ran-and-missed, or
+            // captured something useful.
+            val titleScan = prefs?.getString("last_title_scan", "") ?: ""
+            if (titleScan.isNotEmpty()) data["lastTitleScan"] = titleScan
+            val pageTitle = prefs?.getString("last_page_title", "") ?: ""
+            if (pageTitle.isNotEmpty()) data["lastPageTitle"] = pageTitle
             if (note != null) data["note"] = note
             FirebaseFirestore.getInstance()
                 .collection("children")
