@@ -45,7 +45,14 @@ class BrowserMonitorService : AccessibilityService() {
             "com.microsoft.emmx",
             "com.brave.browser",
             "com.duckduckgo.mobile.android",
-            "com.sec.android.app.sbrowser"
+            "com.sec.android.app.sbrowser",
+            // Google app hosts the home-screen search widget and the
+            // in-app search that Chrome sometimes delegates to. Treating
+            // it as a browser lets us capture ?q= searches done from
+            // the widget before Chrome ever opens.
+            "com.google.android.googlequicksearchbox",
+            // Samsung's version of the Google Search shortcut.
+            "com.samsung.android.app.galaxyfinder",
         )
 
         /** Last seen URL (for deduplication). */
@@ -176,6 +183,46 @@ class BrowserMonitorService : AccessibilityService() {
                 writeDiagnosticStatus(note = "rootInActiveWindow=null")
                 return
             }
+
+            // Google Search widget / Samsung Finder don't have a URL bar
+            // — the user just types a query and the app sends it to the
+            // system browser. Capture the typed text directly as a
+            // search query so the parent sees what was searched even
+            // though no real URL ever renders in this app.
+            if (packageName == "com.google.android.googlequicksearchbox" ||
+                packageName == "com.samsung.android.app.galaxyfinder") {
+                val query = extractSearchBoxText(rootNode)
+                rootNode.recycle()
+                if (query.isNotEmpty() && query != lastUrl) {
+                    lastUrl = query
+                    urlsCaptured += 1
+                    // Synthesize a URL so the parent-side UI still has
+                    // something to deduplicate against. The searchQuery
+                    // field is the meaningful one.
+                    val synthetic =
+                        "https://www.google.com/search?q=" +
+                            java.net.URLEncoder.encode(query, "UTF-8")
+                    prefs?.edit()
+                        ?.putString("last_url", synthetic)
+                        ?.putLong("last_url_time", System.currentTimeMillis())
+                        ?.putString("last_browser", packageName)
+                        ?.apply()
+                    val entry = mapOf<String, Any>(
+                        "url" to synthetic,
+                        "packageName" to packageName,
+                        "timestamp" to System.currentTimeMillis(),
+                    )
+                    synchronized(pendingUrls) {
+                        pendingUrls.addLast(entry)
+                        while (pendingUrls.size > 200) pendingUrls.removeFirst()
+                    }
+                    Log.d(TAG, "Google-widget search: $query")
+                    writeUrlToFirestore(synthetic, packageName, query, "")
+                }
+                writeDiagnosticStatus()
+                return
+            }
+
             val url = extractUrl(rootNode)
             if (url.isEmpty()) {
                 // Sample first EditText text we can find so the parent can tell
@@ -205,6 +252,39 @@ class BrowserMonitorService : AccessibilityService() {
             rootNode.recycle()
 
             if (url.isEmpty() || url == lastUrl) {
+                // Special case: URL extraction failed (common on Firefox
+                // Fenix, where the toolbar shows only the site name
+                // after a tap-out) but we DID capture a page-title or
+                // search-title. Write a synthetic entry so the parent
+                // still sees something. The user's test confirmed this
+                // shape: 'extraction diagnostics' had Firefox results
+                // but rows didn't — because the url-empty branch
+                // bailed before any entry could be queued.
+                if (url.isEmpty() && (pageTitle.isNotEmpty() || titleQuery.isNotEmpty())) {
+                    // De-dupe on whichever text we actually have.
+                    val synthKey = if (titleQuery.isNotEmpty()) titleQuery else pageTitle
+                    if (synthKey != lastUrl) {
+                        lastUrl = synthKey
+                        urlsCaptured += 1
+                        // Synthesize a URL so the row has a link target.
+                        // If titleQuery looks like a real search term,
+                        // route through google as a best-guess; otherwise
+                        // just use a placeholder that the UI will swap
+                        // out for pageTitle.
+                        val synthetic = if (titleQuery.isNotEmpty()) {
+                            "https://www.google.com/search?q=" +
+                                java.net.URLEncoder.encode(titleQuery, "UTF-8")
+                        } else {
+                            "about:blank"
+                        }
+                        writeUrlToFirestore(
+                            synthetic,
+                            packageName,
+                            titleFallback = titleQuery,
+                            pageTitle = pageTitle,
+                        )
+                    }
+                }
                 writeDiagnosticStatus()
                 return
             }
@@ -643,6 +723,50 @@ class BrowserMonitorService : AccessibilityService() {
         return ""
     }
 
+    /**
+     * For the Google Search widget / Samsung Finder we don't have a URL
+     * bar — the active query lives in a plain EditText. Scan the tree
+     * for the first EditText whose text is a non-URL search-y string
+     * (not a URL, not empty, not a hint/placeholder) and return its
+     * trimmed contents as the query.
+     */
+    private fun extractSearchBoxText(root: AccessibilityNodeInfo): String {
+        return findSearchBoxText(root, depth = 0, maxDepth = 12)
+    }
+
+    private fun findSearchBoxText(
+        node: AccessibilityNodeInfo?,
+        depth: Int,
+        maxDepth: Int,
+    ): String {
+        if (node == null || depth > maxDepth) return ""
+        val cls = node.className?.toString() ?: ""
+        if (cls == "android.widget.EditText") {
+            val text = node.text?.toString()?.trim().orEmpty()
+            // Reject: empty, URL-shaped (we're in the search widget,
+            // not Chrome), or obvious placeholders. Length ceiling
+            // guards against accidentally grabbing the contents of a
+            // form field that happens to be an EditText.
+            if (text.isNotEmpty() &&
+                text.length <= 300 &&
+                !text.startsWith("http://") &&
+                !text.startsWith("https://") &&
+                text.lowercase() != "search" &&
+                text.lowercase() != "search google or type a url"
+            ) {
+                return text
+            }
+        }
+        val count = node.childCount.coerceAtMost(40)
+        for (i in 0 until count) {
+            val child = node.getChild(i) ?: continue
+            val r = findSearchBoxText(child, depth + 1, maxDepth)
+            child.recycle()
+            if (r.isNotEmpty()) return r
+        }
+        return ""
+    }
+
     private fun extractUrl(node: AccessibilityNodeInfo): String {
         // Try known URL-bar view IDs for each browser. We keep a generous list
         // because Chrome has renamed the omnibox a few times, vendor forks
@@ -666,13 +790,19 @@ class BrowserMonitorService : AccessibilityService() {
             "org.mozilla.firefox:id/url_bar_title",
             "org.mozilla.firefox:id/mozac_browser_toolbar_url_view",
             "org.mozilla.firefox:id/mozac_browser_toolbar_background",
+            "org.mozilla.firefox:id/mozac_browser_toolbar_edit_url_view",
+            "org.mozilla.firefox:id/awesome_bar_edit_text",
+            "org.mozilla.firefox:id/toolbar_wrapper",
             "org.mozilla.firefox_beta:id/mozac_browser_toolbar_url_view",
+            "org.mozilla.firefox_beta:id/mozac_browser_toolbar_edit_url_view",
             // Opera
             "com.opera.browser:id/url_field",
             "com.opera.mini.native:id/url_field",
             // Edge — same codebase as Chromium
             "com.microsoft.emmx:id/url_bar",
             "com.microsoft.emmx:id/location_bar",
+            "com.microsoft.emmx:id/omnibox_text",
+            "com.microsoft.emmx:id/search_box_text",
             // Brave
             "com.brave.browser:id/url_bar",
             "com.brave.browser:id/location_bar",
@@ -680,7 +810,16 @@ class BrowserMonitorService : AccessibilityService() {
             "com.duckduckgo.mobile.android:id/omnibarTextInput",
             // Samsung Internet
             "com.sec.android.app.sbrowser:id/location_bar_edit_text",
-            "com.sec.android.app.sbrowser:id/url_bar"
+            "com.sec.android.app.sbrowser:id/url_bar",
+            // Google Search app / home-screen widget — the search box
+            // where the user types their query BEFORE the results page
+            // loads in Chrome. Capturing here gets the raw query even
+            // if Chrome's omnibox later collapses the URL.
+            "com.google.android.googlequicksearchbox:id/googleapp_srp_search_plate_text_view",
+            "com.google.android.googlequicksearchbox:id/search_edit_frame",
+            "com.google.android.googlequicksearchbox:id/search_src_text",
+            "com.google.android.googlequicksearchbox:id/search_plate",
+            "com.google.android.googlequicksearchbox:id/googleapp_search_plate"
         )
 
         for (id in urlBarIds) {
