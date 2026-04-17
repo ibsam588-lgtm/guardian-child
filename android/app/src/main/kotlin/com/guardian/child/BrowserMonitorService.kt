@@ -182,6 +182,16 @@ class BrowserMonitorService : AccessibilityService() {
                 // extraction not finding the node at all.
                 lastExtractSample = sampleAnyEditText(rootNode)
             }
+            // Fallback search-query extraction: Chrome's omnibox often
+            // collapses google.com/search?q=foo down to just the domain
+            // pill, so extractSearchQuery(url) returns empty. Walk the
+            // accessibility tree for a title-shaped node matching known
+            // patterns ("foo - Google Search", "foo - YouTube", "foo at
+            // DuckDuckGo") as a secondary source. Done while rootNode is
+            // still alive.
+            val titleQuery = if (url.isNotEmpty() && extractSearchQuery(url).isEmpty()) {
+                scanForSearchTitle(rootNode, url)
+            } else ""
             rootNode.recycle()
 
             if (url.isEmpty() || url == lastUrl) {
@@ -216,7 +226,7 @@ class BrowserMonitorService : AccessibilityService() {
             // Write directly to Firestore so history is synced even when the
             // Flutter app is not running (e.g. the user swiped it from recents
             // and the Dart polling timers are no longer firing).
-            writeUrlToFirestore(url, packageName)
+            writeUrlToFirestore(url, packageName, titleQuery)
 
             writeDiagnosticStatus(force = true)
         } catch (e: Exception) {
@@ -244,7 +254,11 @@ class BrowserMonitorService : AccessibilityService() {
      * Uses a read-modify-write cycle (fire-and-forget) to append to the entries
      * array and keep it capped at 100 items.
      */
-    private fun writeUrlToFirestore(url: String, packageName: String) {
+    private fun writeUrlToFirestore(
+        url: String,
+        packageName: String,
+        titleFallback: String = "",
+    ) {
         val childId = getChildId() ?: return
 
         // Guard against FirebaseApp not being initialised. BrowserMonitor
@@ -265,7 +279,12 @@ class BrowserMonitorService : AccessibilityService() {
         // only the last URL visible to the parent). Using a subcollection
         // also lets us order, filter, and TTL-expire with native Firestore
         // queries.
-        val searchQuery = extractSearchQuery(url)
+        val urlQuery = extractSearchQuery(url)
+        val searchQuery = when {
+            urlQuery.isNotEmpty() -> urlQuery
+            titleFallback.isNotEmpty() -> titleFallback
+            else -> ""
+        }
         val entry = hashMapOf<String, Any>(
             "url"       to url,
             "browser"   to packageName,
@@ -343,6 +362,71 @@ class BrowserMonitorService : AccessibilityService() {
                 else -> ""
             }
         } catch (_: Exception) { "" }
+    }
+
+    /**
+     * Secondary search-query extractor for the case Chrome/other browsers
+     * strip ?q=... from the visible omnibox. The result-page tab title
+     * usually still contains the query — e.g. "cool minecraft mods - Google
+     * Search" or "learn kotlin - YouTube". Walk the subtree looking for a
+     * TextView whose text matches one of those patterns.
+     *
+     * We skip the URL bar itself and only consider nodes with non-trivial
+     * text content so we don't grab toolbar button labels or the like.
+     */
+    private fun scanForSearchTitle(
+        root: AccessibilityNodeInfo,
+        url: String,
+    ): String {
+        val engine = detectSearchEngine(url).ifEmpty { return "" }
+        // Regex per-engine — anchored so random page copy that happens to
+        // contain " - Google Search" doesn't match the middle of a sentence.
+        val pattern = when (engine) {
+            "Google"     -> Regex("""^(.{1,200}?)\s+-\s+Google Search$""")
+            "YouTube"    -> Regex("""^(.{1,200}?)\s+-\s+YouTube$""")
+            "Bing"       -> Regex("""^(.{1,200}?)\s+-\s+Bing$""")
+            "DuckDuckGo" -> Regex("""^(.{1,200}?)\s+at\s+DuckDuckGo$""")
+            "Yahoo"      -> Regex("""^(.{1,200}?)\s+-\s+Yahoo Search Results$""")
+            "Brave"      -> Regex("""^(.{1,200}?)\s+-\s+Brave Search$""")
+            "Ecosia"     -> Regex("""^(.{1,200}?)\s+-\s+Ecosia$""")
+            "Startpage"  -> Regex("""^(.{1,200}?)\s+-\s+Startpage$""")
+            else         -> return ""
+        }
+        return try {
+            findMatchingText(root, pattern, depth = 0, maxDepth = 10)
+        } catch (_: Exception) { "" }
+    }
+
+    /**
+     * DFS-walk the node tree looking for any `text` that matches [pattern].
+     * Returns the first captured group, or empty on no match. Bounded
+     * depth/width so we don't burn CPU on deeply nested result lists.
+     */
+    private fun findMatchingText(
+        node: AccessibilityNodeInfo?,
+        pattern: Regex,
+        depth: Int,
+        maxDepth: Int,
+    ): String {
+        if (node == null || depth > maxDepth) return ""
+        val text = node.text?.toString()?.trim().orEmpty()
+        if (text.isNotEmpty()) {
+            val m = pattern.matchEntire(text)
+            if (m != null) return m.groupValues[1].trim()
+        }
+        val contentDesc = node.contentDescription?.toString()?.trim().orEmpty()
+        if (contentDesc.isNotEmpty()) {
+            val m = pattern.matchEntire(contentDesc)
+            if (m != null) return m.groupValues[1].trim()
+        }
+        val count = node.childCount.coerceAtMost(40) // width cap
+        for (i in 0 until count) {
+            val child = node.getChild(i) ?: continue
+            val r = findMatchingText(child, pattern, depth + 1, maxDepth)
+            child.recycle()
+            if (r.isNotEmpty()) return r
+        }
+        return ""
     }
 
     /** Throttled Firestore write of diagnostic counters. Force=true bypasses
