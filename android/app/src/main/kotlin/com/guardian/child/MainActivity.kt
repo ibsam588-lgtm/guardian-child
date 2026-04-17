@@ -424,7 +424,11 @@ class MainActivity : FlutterActivity() {
     /** Returns the last 50 call log entries from the past 24 hours. */
     private fun getRecentCallLog(): List<Map<String, Any?>> {
         val results = mutableListOf<Map<String, Any?>>()
-        val oneDayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+        // Match the parent-app 7-day retention policy: query 7 days of
+        // history so a parent browsing the card sees the whole window
+        // their UI is showing. Previous 24h window meant the card was
+        // empty for most of the week even when calls existed.
+        val sevenDaysAgo = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000L
 
         val cursor: Cursor? = contentResolver.query(
             CallLog.Calls.CONTENT_URI,
@@ -436,12 +440,12 @@ class MainActivity : FlutterActivity() {
                 CallLog.Calls.DURATION
             ),
             "${CallLog.Calls.DATE} > ?",
-            arrayOf(oneDayAgo.toString()),
+            arrayOf(sevenDaysAgo.toString()),
             "${CallLog.Calls.DATE} DESC"
         )
 
         cursor?.use {
-            val maxEntries = 50
+            val maxEntries = 100
             var count = 0
             while (it.moveToNext() && count < maxEntries) {
                 val number = it.getString(0) ?: ""
@@ -455,6 +459,8 @@ class MainActivity : FlutterActivity() {
                     CallLog.Calls.OUTGOING_TYPE -> "outgoing"
                     CallLog.Calls.MISSED_TYPE -> "missed"
                     CallLog.Calls.REJECTED_TYPE -> "rejected"
+                    CallLog.Calls.VOICEMAIL_TYPE -> "voicemail"
+                    CallLog.Calls.BLOCKED_TYPE -> "blocked"
                     else -> "unknown"
                 }
 
@@ -474,52 +480,90 @@ class MainActivity : FlutterActivity() {
 
     // ── SMS log ──────────────────────────────────────────────────────────────
 
-    /** Returns the last 50 SMS messages from the past 24 hours. */
+    /** Returns the last 50 SMS messages from the past 24 hours.
+     *
+     * Historically we queried Telephony.Sms.CONTENT_URI which *should*
+     * be a union view across inbox/sent/drafts — but on modern Android
+     * (Samsung One UI in particular) sent messages are often stored
+     * under a separate URI and the union view only returns inbox rows
+     * unless the caller is the default SMS app. Firestore confirmed
+     * this: communications had only type='received' rows even though
+     * the child had sent messages.
+     *
+     * Fix: query inbox and sent URIs explicitly and merge the results.
+     * Duplicates are avoided by keying on (address, date, body).
+     */
     private fun getRecentSmsLog(): List<Map<String, Any?>> {
-        val results = mutableListOf<Map<String, Any?>>()
-        val oneDayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+        val sevenDaysAgo = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000L
+        val all = mutableListOf<Map<String, Any?>>()
+        val seen = HashSet<String>()
 
-        val cursor: Cursor? = contentResolver.query(
-            Telephony.Sms.CONTENT_URI,
-            arrayOf(
-                Telephony.Sms.ADDRESS,
-                Telephony.Sms.BODY,
-                Telephony.Sms.TYPE,
-                Telephony.Sms.DATE
-            ),
-            "${Telephony.Sms.DATE} > ?",
-            arrayOf(oneDayAgo.toString()),
-            "${Telephony.Sms.DATE} DESC"
+        // Inbox (received) and Sent as explicit URIs, plus the union
+        // CONTENT_URI as a fallback in case one of the specific URIs
+        // is missing on this OEM. Also include OUTBOX which is
+        // 'pending send' — still useful context for the parent.
+        val sources = listOf(
+            Telephony.Sms.Inbox.CONTENT_URI to "received",
+            Telephony.Sms.Sent.CONTENT_URI  to "sent",
+            Telephony.Sms.Outbox.CONTENT_URI to "sent",
+            Telephony.Sms.CONTENT_URI        to null, // null means derive from TYPE column
         )
 
-        cursor?.use {
-            val maxEntries = 50
-            var count = 0
-            while (it.moveToNext() && count < maxEntries) {
-                val address = it.getString(0) ?: ""
-                val body = it.getString(1) ?: ""
-                val type = it.getInt(2)
-                val date = it.getLong(3)
+        for ((uri, fixedType) in sources) {
+            val cursor: Cursor? = try {
+                contentResolver.query(
+                    uri,
+                    arrayOf(
+                        Telephony.Sms.ADDRESS,
+                        Telephony.Sms.BODY,
+                        Telephony.Sms.TYPE,
+                        Telephony.Sms.DATE,
+                    ),
+                    "${Telephony.Sms.DATE} > ?",
+                    arrayOf(sevenDaysAgo.toString()),
+                    "${Telephony.Sms.DATE} DESC",
+                )
+            } catch (e: Exception) {
+                Log.w("MainActivity", "sms query failed for $uri: ${e.message}")
+                null
+            }
 
-                val typeStr = when (type) {
-                    Telephony.Sms.MESSAGE_TYPE_INBOX -> "received"
-                    Telephony.Sms.MESSAGE_TYPE_SENT -> "sent"
-                    Telephony.Sms.MESSAGE_TYPE_DRAFT -> "draft"
-                    else -> "unknown"
+            cursor?.use {
+                var count = 0
+                while (it.moveToNext() && count < 100) {
+                    val address = it.getString(0) ?: ""
+                    val body = it.getString(1) ?: ""
+                    val rawType = it.getInt(2)
+                    val date = it.getLong(3)
+
+                    val typeStr = fixedType ?: when (rawType) {
+                        Telephony.Sms.MESSAGE_TYPE_INBOX -> "received"
+                        Telephony.Sms.MESSAGE_TYPE_SENT  -> "sent"
+                        Telephony.Sms.MESSAGE_TYPE_OUTBOX -> "sent"
+                        Telephony.Sms.MESSAGE_TYPE_DRAFT -> "draft"
+                        else -> "unknown"
+                    }
+
+                    // Dedup key — same message can appear in both the
+                    // union URI and one of the type-specific URIs.
+                    val key = "$address|$date|${body.length}"
+                    if (seen.add(key)) {
+                        all.add(mapOf(
+                            "address" to address,
+                            "contactName" to resolveContactName(address),
+                            "body" to body,
+                            "type" to typeStr,
+                            "date" to date,
+                        ))
+                    }
+                    count++
                 }
-
-                results.add(mapOf(
-                    "address" to address,
-                    "contactName" to resolveContactName(address),
-                    "body" to body,
-                    "type" to typeStr,
-                    "date" to date
-                ))
-                count++
             }
         }
 
-        return results
+        // Global cap after merge.
+        all.sortByDescending { (it["date"] as? Long) ?: 0L }
+        return all.take(100)
     }
 
     // ── Contact name resolver ────────────────────────────────────────────────
