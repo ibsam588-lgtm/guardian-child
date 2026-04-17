@@ -4,7 +4,7 @@
 ![Dart](https://img.shields.io/badge/Dart-3.4-0175C2?logo=dart&logoColor=white)
 ![Firebase](https://img.shields.io/badge/Firebase-Firestore%20%7C%20Auth%20%7C%20FCM-FFCA28?logo=firebase&logoColor=black)
 ![Android](https://img.shields.io/badge/Android-API%2026%2B-3DDC84?logo=android&logoColor=white)
-![Version](https://img.shields.io/badge/Version-1.0.6-blue)
+![Version](https://img.shields.io/badge/Version-1.0.15-blue)
 ![CI](https://img.shields.io/github/actions/workflow/status/ibsam588-lgtm/guardian-child/ci.yml?label=CI&logo=githubactions&logoColor=white)
 ![License](https://img.shields.io/badge/License-Proprietary-red)
 
@@ -17,7 +17,7 @@ The **child-device half** of the GuardIan parental-control system. This app is i
 ## Table of Contents
 
 1. [What This App Does](#what-this-app-does)
-2. [Recent Changes — v1.0.6](#recent-changes--v106-bug-sweep)
+2. [Recent Changes — v1.0.15](#recent-changes--v1015)
 3. [Architecture](#architecture)
 4. [Native Services](#native-services)
 5. [Required Permissions](#required-permissions)
@@ -40,6 +40,25 @@ Once paired to a parent account via a 6-digit code, this app:
 - On parent command, plays a maximum-volume looping siren that cannot be silenced without the parent stopping it remotely.
 - Sends an SOS alert with current location when the child taps the SOS button.
 - Is protected from uninstall by a `DeviceAdminReceiver` — removing the app requires first revoking Device Admin in system settings.
+
+---
+
+## Recent Changes — v1.0.15
+
+Runtime bug-fix arc v1.0.7 through v1.0.15, investigated against live Firestore data.
+
+| # | Area | Change |
+|---|------|--------|
+| AR | Geofence | Baseline now seeds `_lastOutsideAlertTs` and fires an initial "outside" alert for any active fence the child starts outside of. Also re-evaluates when a new fence appears in the Firestore subscription mid-session. Confirmed root cause: fences created while child was already outside never generated an enter→exit transition, so no alert ever fired |
+| AJ | Geofence | Every-1-minute "still outside" reminder alerts via `_geofenceRepeatTimer` (30-second tick, 60-second floor per fence). `isRepeat: true` flag on the alert doc so the cloud function can branch the push copy |
+| AH | Geofence | Child device now posts a local high-priority notification on every enter/exit/repeat transition via `MainActivity.showGeofenceLocalNotification`, in addition to the FCM push the parent gets via the cloud function |
+| AL | Enforcement | `AppLimitInfo.fromMap` drops the legacy `(isEnabled && limit == 0)` derivation of `isBlocked`. Matches the parent-side enforcement policy |
+| Usage sync | Enforcement | `_reportAppUsage` now stamps `dailyUsageMinutes` + `dailyUsageDate` + `lastUsageSync` back onto each `appLimits/{pkg}` doc. Without this, parent-side time-limit detection always saw 0 minutes used and never triggered over-limit blocks |
+| AQ | Browser | `findPageTitle` walks the accessibility tree for a plausible page-title node, preferring `paneTitle` on Android O+. Written as an optional `pageTitle` field on each browser_history doc |
+| AQ | Browser | `looksLikeUrl` now rejects Chrome's transient URL-bar placeholders (`Loading...`, `Connecting`, `Redirecting`, etc.) and requires at least one letter in the captured text. Confirmed via live Firestore that `url: "Loading..."` was a common garbage capture |
+| X | Retention | Browser history and communications older than 7 days auto-pruned every 2 hours |
+| AO | Requests | Child can now cancel a pending time request via a "Cancel Request" button that deletes the `timeRequests` doc |
+| AC | App block | Modern themed unblock dialog in `AppBlockedActivity` with a `BadTokenException` guard and a time-picker spinner (hidden for pure unblock requests) |
 
 ---
 
