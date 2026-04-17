@@ -246,38 +246,103 @@ class BrowserMonitorService : AccessibilityService() {
      */
     private fun writeUrlToFirestore(url: String, packageName: String) {
         val childId = getChildId() ?: return
+
+        // Guard against FirebaseApp not being initialised. BrowserMonitor
+        // can fire before FirebaseInitProvider has run on some OEMs after
+        // a cold boot — calling FirebaseFirestore.getInstance() before
+        // init throws IllegalStateException and crashes the accessibility
+        // service.
+        try { FirebaseApp.getInstance() } catch (_: IllegalStateException) {
+            try { FirebaseApp.initializeApp(applicationContext) } catch (e: Exception) {
+                Log.w(TAG, "writeUrlToFirestore: Firebase init failed: ${e.message}")
+                return
+            }
+        }
+
+        // Each visit is its own document so we don't race against ourselves
+        // on concurrent writes (the old append-to-array path had a get/set
+        // window where fast navigations could clobber each other, leaving
+        // only the last URL visible to the parent). Using a subcollection
+        // also lets us order, filter, and TTL-expire with native Firestore
+        // queries.
+        val searchQuery = extractSearchQuery(url)
         val entry = hashMapOf<String, Any>(
             "url"       to url,
             "browser"   to packageName,
             "visitedAt" to Timestamp.now(),
         )
-        val ref = FirebaseFirestore.getInstance()
+        if (searchQuery.isNotEmpty()) {
+            entry["searchQuery"] = searchQuery
+            entry["searchEngine"] = detectSearchEngine(url)
+        }
+
+        val col = FirebaseFirestore.getInstance()
             .collection("children")
             .document(childId)
             .collection("browser_history")
-            .document("recent")
 
-        ref.get()
-            .addOnSuccessListener { snap ->
-                @Suppress("UNCHECKED_CAST")
-                val existing = (snap.get("entries") as? List<Map<String, Any>>) ?: emptyList()
-                val merged = (existing + entry).takeLast(100)
-                ref.set(hashMapOf<String, Any>(
-                    "entries"   to merged,
-                    "updatedAt" to Timestamp.now(),
-                )).addOnFailureListener { e ->
-                    Log.w(TAG, "writeUrlToFirestore set failed: ${e.message}")
-                }
-            }
+        col.add(entry)
             .addOnFailureListener { e ->
-                Log.w(TAG, "writeUrlToFirestore get failed — writing fresh doc: ${e.message}")
-                ref.set(hashMapOf<String, Any>(
-                    "entries"   to listOf(entry),
-                    "updatedAt" to Timestamp.now(),
-                )).addOnFailureListener { e2 ->
-                    Log.w(TAG, "writeUrlToFirestore fallback failed: ${e2.message}")
-                }
+                Log.w(TAG, "browser_history add failed: ${e.message}")
             }
+
+        // Keep the legacy /recent doc pointing at the most recent URL too,
+        // so any older parent-app build that still reads the single-doc
+        // shape doesn't regress to empty while the new build rolls out.
+        // The array on /recent is no longer relied on by the parent UI.
+        val recentRef = col.document("recent")
+        recentRef.set(hashMapOf<String, Any>(
+            "lastUrl"      to url,
+            "lastBrowser"  to packageName,
+            "updatedAt"    to Timestamp.now(),
+        ), com.google.firebase.firestore.SetOptions.merge())
+            .addOnFailureListener { e ->
+                Log.w(TAG, "browser_history /recent merge failed: ${e.message}")
+            }
+    }
+
+    /**
+     * Pulls the user's query out of a known search-engine URL. Returns an
+     * empty string if the URL isn't a recognised search. We extract this on
+     * the child so the parent UI can surface "searched for: 'foo'" without
+     * having to parse URLs in the client.
+     */
+    private fun extractSearchQuery(url: String): String {
+        return try {
+            val uri = android.net.Uri.parse(url)
+            val host = uri.host?.lowercase() ?: return ""
+            val param = when {
+                host.contains("google.")       -> "q"
+                host.contains("bing.com")      -> "q"
+                host.contains("duckduckgo.")   -> "q"
+                host.contains("yahoo.")        -> "p"
+                host.contains("yandex.")       -> "text"
+                host.contains("youtube.com")   -> "search_query"
+                host.contains("brave.com")     -> "q"
+                host.contains("ecosia.org")    -> "q"
+                host.contains("startpage.com") -> "query"
+                else -> return ""
+            }
+            uri.getQueryParameter(param)?.trim().orEmpty()
+        } catch (_: Exception) { "" }
+    }
+
+    private fun detectSearchEngine(url: String): String {
+        return try {
+            val host = android.net.Uri.parse(url).host?.lowercase() ?: return ""
+            when {
+                host.contains("google.")       -> "Google"
+                host.contains("bing.com")      -> "Bing"
+                host.contains("duckduckgo.")   -> "DuckDuckGo"
+                host.contains("yahoo.")        -> "Yahoo"
+                host.contains("yandex.")       -> "Yandex"
+                host.contains("youtube.com")   -> "YouTube"
+                host.contains("brave.com")     -> "Brave"
+                host.contains("ecosia.org")    -> "Ecosia"
+                host.contains("startpage.com") -> "Startpage"
+                else -> ""
+            }
+        } catch (_: Exception) { "" }
     }
 
     /** Throttled Firestore write of diagnostic counters. Force=true bypasses
