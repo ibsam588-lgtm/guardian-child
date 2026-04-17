@@ -55,6 +55,7 @@ class MonitorService extends ChangeNotifier {
   Timer? _installedAppsTimer;
   Timer? _browserSyncTimer;
   Timer? _browserPruneTimer;
+  Timer? _commsPruneTimer;
   Timer? _frequentEnforcementTimer;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _limitsSubscription;
   StreamSubscription? _commandsSubscription;
@@ -146,13 +147,22 @@ class MonitorService extends ChangeNotifier {
       unawaited(_syncBrowserHistory(childId));
     });
 
-    // Prune browser history older than 48 hours. Runs on start and then
+    // Prune browser history older than 7 days. Runs on start and then
     // once an hour — much cheaper than pruning on every write, and the
     // parent UI also filters by visitedAt on read so stale rows never
     // actually surface even between prunes.
     unawaited(_pruneBrowserHistory(childId));
     _browserPruneTimer = Timer.periodic(const Duration(hours: 1), (_) {
       unawaited(_pruneBrowserHistory(childId));
+    });
+
+    // Prune per-day communication docs older than 7 days on the same
+    // hourly cadence. The parent UI now surfaces a "7-day retention"
+    // banner on the Communications screen, so data must actually roll
+    // off after that window to match what the user is being told.
+    unawaited(_pruneCommunications(childId));
+    _commsPruneTimer = Timer.periodic(const Duration(hours: 1), (_) {
+      unawaited(_pruneCommunications(childId));
     });
 
     // Sync communications once on start
@@ -183,6 +193,7 @@ class MonitorService extends ChangeNotifier {
     _installedAppsTimer?.cancel();
     _browserSyncTimer?.cancel();
     _browserPruneTimer?.cancel();
+    _commsPruneTimer?.cancel();
     _frequentEnforcementTimer?.cancel();
     _positionSubscription?.cancel();
     _commandsSubscription?.cancel();
@@ -539,15 +550,16 @@ class MonitorService extends ChangeNotifier {
     }
   }
 
-  /// Deletes per-visit browser_history documents older than 48 hours.
-  /// The parent UI also filters by visitedAt on read, so this prune is
-  /// housekeeping — stale rows never surface in the UI even before this
-  /// runs. Kept cheap: single inequality query, small batched delete.
+  /// Deletes per-visit browser_history documents older than 7 days.
+  /// The parent UI also filters by visitedAt on read so stale rows never
+  /// surface in the UI even before this runs. Kept cheap: single
+  /// inequality query, small batched delete. The 7-day retention is
+  /// documented on the parent UI so the user is aware.
   Future<void> _pruneBrowserHistory(String childId) async {
     if (childId.isEmpty) return;
     try {
       final cutoff =
-          Timestamp.fromDate(DateTime.now().subtract(const Duration(hours: 48)));
+          Timestamp.fromDate(DateTime.now().subtract(const Duration(days: 7)));
       final snap = await _db
           .collection('children')
           .doc(childId)
@@ -567,6 +579,40 @@ class MonitorService extends ChangeNotifier {
       debugPrint('BrowserPrune: removed ${snap.docs.length} expired entries');
     } catch (e) {
       debugPrint('BrowserPrune error: $e');
+    }
+  }
+
+  /// Deletes per-day communication docs older than 7 days. Docs are
+  /// keyed by yyyy-MM-dd in the `date` field (and commonly in the doc
+  /// id), so we can just filter lexicographically against the cutoff.
+  /// Bounded delete in batches so a long-inactive account that
+  /// accumulated weeks of history doesn't hammer Firestore on first
+  /// prune.
+  Future<void> _pruneCommunications(String childId) async {
+    if (childId.isEmpty) return;
+    try {
+      final cutoffDate =
+          DateTime.now().subtract(const Duration(days: 7));
+      final cutoffStr =
+          '${cutoffDate.year.toString().padLeft(4, '0')}-'
+          '${cutoffDate.month.toString().padLeft(2, '0')}-'
+          '${cutoffDate.day.toString().padLeft(2, '0')}';
+      final snap = await _db
+          .collection('children')
+          .doc(childId)
+          .collection('communications')
+          .where('date', isLessThan: cutoffStr)
+          .limit(60) // two months worth — generous but bounded
+          .get();
+      if (snap.docs.isEmpty) return;
+      final batch = _db.batch();
+      for (final doc in snap.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+      debugPrint('CommsPrune: removed ${snap.docs.length} day docs');
+    } catch (e) {
+      debugPrint('CommsPrune error: $e');
     }
   }
 

@@ -293,24 +293,81 @@ class AppBlockedActivity : Activity() {
         }
 
         val isUnblock = reason == REASON_BLOCKED
-        val titleText = if (isUnblock) "Ask to unblock $appName" else "Ask for more time on $appName"
-        val hint = if (isUnblock)
-            "Optional: why do you want this unblocked?"
-        else
-            "Optional: why do you need more time?"
 
-        // Container lets us stack a minute spinner on top of the note field
-        // for the time-limit case. For the unblock case we hide the spinner
-        // since the request is all-or-nothing — a blocked app is unblocked,
-        // not time-gated.
-        val container = LinearLayout(this).apply {
+        // Brand palette — keep in sync with Flutter app_theme.dart
+        val blue = android.graphics.Color.parseColor("#3B82F6")
+        val red = android.graphics.Color.parseColor("#EF4444")
+        val surface = android.graphics.Color.parseColor("#FFFFFF")
+        val textPrimary = android.graphics.Color.parseColor("#1E293B")
+        val textMuted = android.graphics.Color.parseColor("#64748B")
+        val accentBg = android.graphics.Color.parseColor(
+            if (isUnblock) "#FEE2E2" else "#DBEAFE"
+        )
+        val accentFg = if (isUnblock) red else blue
+
+        // Root card with rounded corners
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 16, 48, 0)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(surface)
+                cornerRadius = 48f
+            }
+            setPadding(0, 0, 0, 0)
         }
 
-        // Time selector — only for REASON_LIMIT_REACHED requests.
+        // Icon + title header block
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(56, 56, 56, 16)
+        }
+        val iconView = TextView(this).apply {
+            text = if (isUnblock) "\uD83D\uDD13" else "\u23F1\uFE0F"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(accentBg)
+            }
+            gravity = Gravity.CENTER
+            val size = 128
+            layoutParams = LinearLayout.LayoutParams(size, size)
+            setPadding(0, 0, 0, 0)
+        }
+        val titleBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            )
+        }
+        val titleText = TextView(this).apply {
+            text = if (isUnblock) "Request Unblock" else "Request More Time"
+            setTextColor(textPrimary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        val subtitleText = TextView(this).apply {
+            text = appName
+            setTextColor(textMuted)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setPadding(0, 4, 0, 0)
+        }
+        titleBlock.addView(titleText)
+        titleBlock.addView(subtitleText)
+        header.addView(iconView)
+        header.addView(titleBlock)
+        root.addView(header)
+
+        // Body container
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(56, 8, 56, 8)
+        }
+
+        // Time spinner — only for REASON_LIMIT_REACHED
         val minuteOptions = listOf(15, 30, 45, 60, 90, 120)
-        val labels = minuteOptions.map { m ->
+        val spinnerLabels = minuteOptions.map { m ->
             if (m < 60) "$m minutes"
             else if (m == 60) "1 hour"
             else "${m / 60} hours${if (m % 60 == 0) "" else " ${m % 60} min"}"
@@ -319,48 +376,115 @@ class AppBlockedActivity : Activity() {
             adapter = ArrayAdapter(
                 this@AppBlockedActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                labels
+                spinnerLabels
             )
-            setSelection(0)  // default 15 minutes
+            setSelection(0)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(android.graphics.Color.parseColor("#F1F5F9"))
+                cornerRadius = 24f
+            }
+            setPadding(32, 24, 32, 24)
         }
         if (!isUnblock) {
-            val prompt = TextView(this).apply {
+            val spinnerLabel = TextView(this).apply {
                 text = "How much extra time?"
-                setPadding(0, 0, 0, 8)
-                setTextColor(android.graphics.Color.parseColor("#1E293B"))
+                setTextColor(textPrimary)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, 8, 0, 12)
             }
-            container.addView(prompt)
-            container.addView(spinner)
+            body.addView(spinnerLabel)
+            body.addView(spinner)
         }
 
+        // Note field
+        val noteLabel = TextView(this).apply {
+            text = if (isUnblock) "Why do you want this unblocked?" else "Why do you need more time?"
+            setTextColor(textPrimary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, if (isUnblock) 8 else 32, 0, 12)
+        }
         val note = EditText(this).apply {
-            setHint(hint)
+            setHint("Optional — helps your parent decide")
+            setHintTextColor(textMuted)
+            setTextColor(textPrimary)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             maxLines = 4
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = if (isUnblock) 0 else 24
-            layoutParams = lp
-        }
-        container.addView(note)
-
-        AlertDialog.Builder(this)
-            .setTitle(titleText)
-            .setView(container)
-            .setPositiveButton("Send") { _, _ ->
-                val minutes = if (isUnblock) 0 else minuteOptions[spinner.selectedItemPosition]
-                submitTimeRequest(
-                    pkg = pkg,
-                    appName = appName,
-                    reason = reason,
-                    childNote = note.text.toString().trim(),
-                    requestedMinutes = minutes,
-                )
+            minLines = 2
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(android.graphics.Color.parseColor("#F8FAFC"))
+                cornerRadius = 24f
+                setStroke(2, android.graphics.Color.parseColor("#E2E8F0"))
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+            setPadding(32, 24, 32, 24)
+            gravity = Gravity.TOP or Gravity.START
+        }
+        body.addView(noteLabel)
+        body.addView(note)
+        root.addView(body)
+
+        // Actions row
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(56, 40, 56, 48)
+        }
+        val cancelBtn = Button(this).apply {
+            text = "Cancel"
+            setTextColor(textMuted)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setPadding(32, 24, 32, 24)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        val sendBtn = Button(this).apply {
+            text = "Send Request"
+            setTextColor(android.graphics.Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(accentFg)
+                cornerRadius = 32f
+            }
+            setPadding(64, 24, 64, 24)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        actions.addView(cancelBtn)
+        val spacer = TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(24, 1)
+        }
+        actions.addView(spacer)
+        actions.addView(sendBtn)
+        root.addView(actions)
+
+        // Wrap in a dialog with transparent window background so our
+        // rounded corners aren't clipped by the default alert frame.
+        val dialog = AlertDialog.Builder(this)
+            .setView(root)
+            .setCancelable(true)
+            .create()
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(
+                android.graphics.Color.TRANSPARENT
+            )
+        )
+
+        cancelBtn.setOnClickListener { dialog.dismiss() }
+        sendBtn.setOnClickListener {
+            val minutes = if (isUnblock) 0 else minuteOptions[spinner.selectedItemPosition]
+            submitTimeRequest(
+                pkg = pkg,
+                appName = appName,
+                reason = reason,
+                childNote = note.text.toString().trim(),
+                requestedMinutes = minutes,
+            )
+            dialog.dismiss()
+        }
+
+        dialog.show()
     }
 
     /**
