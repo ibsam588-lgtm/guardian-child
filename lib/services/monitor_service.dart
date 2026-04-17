@@ -1117,35 +1117,78 @@ class MonitorService extends ChangeNotifier {
       // baseline-outside path and gets an initial alert + repeat
       // timer seed.
       final newFenceIds = currFenceIds.difference(prevFenceIds);
-      if (newFenceIds.isNotEmpty && !_geofenceBaselineNeeded) {
+      if (newFenceIds.isNotEmpty) {
         final lat = _lastLat;
         final lng = _lastLng;
         if (lat != null && lng != null) {
-          for (final newId in newFenceIds) {
-            final fence = fences.firstWhere((f) => f.id == newId);
-            final inside = _haversineMeters(lat, lng, fence.lat, fence.lng) <=
-                fence.radiusMeters;
-            if (inside) {
-              _fencesCurrentlyInside.add(newId);
-            } else {
-              // Seed the repeat timer + fire initial outside alert.
-              _lastOutsideAlertTs[newId] =
-                  DateTime.now().millisecondsSinceEpoch;
-              unawaited(_writeFenceAlert(
-                childId,
-                fence,
-                entered: false,
-                lat: lat,
-                lng: lng,
-                isRepeat: false,
-              ));
+          // Cached position available — evaluate immediately.
+          // If baseline already ran, seed outside-alerts directly;
+          // otherwise let baseline do it on its next run.
+          if (!_geofenceBaselineNeeded) {
+            for (final newId in newFenceIds) {
+              final fence = fences.firstWhere((f) => f.id == newId);
+              final inside = _haversineMeters(lat, lng, fence.lat, fence.lng) <=
+                  fence.radiusMeters;
+              if (inside) {
+                _fencesCurrentlyInside.add(newId);
+              } else {
+                // Seed the repeat timer + fire initial outside alert.
+                _lastOutsideAlertTs[newId] =
+                    DateTime.now().millisecondsSinceEpoch;
+                unawaited(_writeFenceAlert(
+                  childId,
+                  fence,
+                  entered: false,
+                  lat: lat,
+                  lng: lng,
+                  isRepeat: false,
+                ));
+              }
             }
           }
+        } else {
+          // No cached position yet — fences arrived during cold start
+          // before the first location tick. Reset baselineNeeded so
+          // the next tick runs the outside-seed logic for these new
+          // fences. Without this reset, the fences sit silent until
+          // the child physically moves enough to trigger a new
+          // position-changed event, which may never happen for a
+          // stationary phone on a home Wi-Fi.
+          _geofenceBaselineNeeded = true;
+          debugPrint(
+              'GeoFence: new fences arrived before position cached — baseline reset');
+          // Also proactively fetch current position so we don't have
+          // to wait for the next movement event.
+          _triggerImmediateGeofenceEvaluation(childId);
         }
       }
     }, onError: (e) {
       debugPrint('GeoFence subscription error: $e');
     });
+  }
+
+  /// Proactively get the current GPS fix and run geofence evaluation
+  /// against it. Used when new fences arrive in the Firestore
+  /// subscription before the location stream has ever delivered a
+  /// position — common on cold start for a stationary device. Without
+  /// this, the initial "outside" alert would only fire whenever the
+  /// child next moved, which on a sleeping phone could be minutes or
+  /// hours later.
+  Future<void> _triggerImmediateGeofenceEvaluation(String childId) async {
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+      _evaluateGeofences(childId, pos.latitude, pos.longitude);
+    } catch (e) {
+      debugPrint('GeoFence: immediate position fetch failed: $e');
+      // If we can't get a fix right now, the next natural location
+      // tick will pick it up because _geofenceBaselineNeeded was
+      // reset to true.
+    }
   }
 
   /// Compare the current GPS reading against every active fence and fire
