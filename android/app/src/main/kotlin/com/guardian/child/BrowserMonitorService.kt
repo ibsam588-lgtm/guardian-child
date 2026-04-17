@@ -371,6 +371,15 @@ class BrowserMonitorService : AccessibilityService() {
      * Search" or "learn kotlin - YouTube". Walk the subtree looking for a
      * TextView whose text matches one of those patterns.
      *
+     * Regex notes:
+     * - Accept hyphen-minus (-), en-dash (–), and em-dash (—) as the
+     *   separator since different Chrome versions / locales vary.
+     * - Use \s+ for whitespace, not literal spaces, so non-breaking or
+     *   wide spaces don't break the match.
+     * - The Google suffix is localised ("Google Search" / "Google
+     *   Recherche" / "Google 検索" / etc). We match a looser
+     *   '.*?Google.*?' tail so any language works.
+     *
      * We skip the URL bar itself and only consider nodes with non-trivial
      * text content so we don't grab toolbar button labels or the like.
      */
@@ -379,21 +388,33 @@ class BrowserMonitorService : AccessibilityService() {
         url: String,
     ): String {
         val engine = detectSearchEngine(url).ifEmpty { return "" }
-        // Regex per-engine — anchored so random page copy that happens to
-        // contain " - Google Search" doesn't match the middle of a sentence.
+        // Separator class: hyphen-minus, en-dash, em-dash, figure dash, minus sign
+        val sep = """[\s]+[-\u2010\u2011\u2012\u2013\u2014\u2212][\s]+"""
         val pattern = when (engine) {
-            "Google"     -> Regex("""^(.{1,200}?)\s+-\s+Google Search$""")
-            "YouTube"    -> Regex("""^(.{1,200}?)\s+-\s+YouTube$""")
-            "Bing"       -> Regex("""^(.{1,200}?)\s+-\s+Bing$""")
-            "DuckDuckGo" -> Regex("""^(.{1,200}?)\s+at\s+DuckDuckGo$""")
-            "Yahoo"      -> Regex("""^(.{1,200}?)\s+-\s+Yahoo Search Results$""")
-            "Brave"      -> Regex("""^(.{1,200}?)\s+-\s+Brave Search$""")
-            "Ecosia"     -> Regex("""^(.{1,200}?)\s+-\s+Ecosia$""")
-            "Startpage"  -> Regex("""^(.{1,200}?)\s+-\s+Startpage$""")
+            "Google"     -> Regex("""^(.{1,200}?)$sep.*?Google.*$""", RegexOption.IGNORE_CASE)
+            "YouTube"    -> Regex("""^(.{1,200}?)$sep.*?YouTube.*$""", RegexOption.IGNORE_CASE)
+            "Bing"       -> Regex("""^(.{1,200}?)$sep.*?Bing.*$""", RegexOption.IGNORE_CASE)
+            "DuckDuckGo" -> Regex("""^(.{1,200}?)(?:$sep|\s+at\s+).*?DuckDuckGo.*$""", RegexOption.IGNORE_CASE)
+            "Yahoo"      -> Regex("""^(.{1,200}?)$sep.*?Yahoo.*$""", RegexOption.IGNORE_CASE)
+            "Brave"      -> Regex("""^(.{1,200}?)$sep.*?Brave.*$""", RegexOption.IGNORE_CASE)
+            "Ecosia"     -> Regex("""^(.{1,200}?)$sep.*?Ecosia.*$""", RegexOption.IGNORE_CASE)
+            "Startpage"  -> Regex("""^(.{1,200}?)$sep.*?Startpage.*$""", RegexOption.IGNORE_CASE)
+            "Yandex"     -> Regex("""^(.{1,200}?)$sep.*?Yandex.*$""", RegexOption.IGNORE_CASE)
             else         -> return ""
         }
         return try {
-            findMatchingText(root, pattern, depth = 0, maxDepth = 10)
+            val hit = findMatchingText(root, pattern, depth = 0, maxDepth = 12)
+            // Write a diagnostic breadcrumb so we can tell, from the
+            // parent's logs, whether extraction is failing because the
+            // tree scan ran and found nothing vs. was never reached.
+            if (hit.isEmpty()) {
+                prefs?.edit()?.putString("last_title_scan",
+                    "miss:$engine")?.apply()
+            } else {
+                prefs?.edit()?.putString("last_title_scan",
+                    "hit:$engine:${hit.take(40)}")?.apply()
+            }
+            hit
         } catch (_: Exception) { "" }
     }
 
