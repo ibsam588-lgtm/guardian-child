@@ -1067,12 +1067,14 @@ class MonitorService extends ChangeNotifier {
       final type = entered ? 'geofence_enter' : 'geofence_exit';
       final childName = childSnap.data()?['name'] as String? ?? 'Your child';
       final verb = entered ? 'entered' : 'left';
+      final title = '$childName $verb ${fence.name}';
+      final message = '$childName has $verb the "${fence.name}" zone.';
       await _db.collection('alerts').add({
         'parentUid': parentUid,
         'childId': childId,
         'type': type,
-        'title': '$childName $verb ${fence.name}',
-        'message': '$childName has $verb the "${fence.name}" zone.',
+        'title': title,
+        'message': message,
         'fenceId': fence.id,
         'fenceName': fence.name,
         'lat': lat,
@@ -1080,6 +1082,32 @@ class MonitorService extends ChangeNotifier {
         'timestamp': FieldValue.serverTimestamp(),
       });
       debugPrint('GeoFence: alert written — $type for ${fence.name}');
+
+      // Also post a local notification on the child's own phone. The
+      // parent gets an FCM push via the onGeofenceAlert cloud function
+      // triggered by the /alerts write above; the child gets this
+      // local channel notification so they're aware they've crossed a
+      // zone boundary without relying on any round-trip to Firebase.
+      try {
+        // Use a child-facing phrasing — the parent notification refers
+        // to "your child", but on the child's phone that reads wrong.
+        final childFacingTitle = entered
+            ? 'Entered ${fence.name}'
+            : 'Left ${fence.name}';
+        final childFacingBody = entered
+            ? 'You entered the "${fence.name}" zone. Your parent has been notified.'
+            : 'You left the "${fence.name}" zone. Your parent has been notified.';
+        await _channel.invokeMethod<void>('showGeofenceNotification', {
+          'title': childFacingTitle,
+          'body': childFacingBody,
+          'transition': type,
+        });
+      } on MissingPluginException {
+        // Running on a platform without the native channel — silent
+        // no-op. Parent still gets their push via the cloud function.
+      } catch (e) {
+        debugPrint('GeoFence: local notify failed: $e');
+      }
     } catch (e) {
       debugPrint('GeoFence writeAlert error: $e');
     }
