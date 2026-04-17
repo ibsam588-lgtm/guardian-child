@@ -460,7 +460,15 @@ class MonitorService extends ChangeNotifier {
         if (shouldBlock && currentPkg == limit.packageName) {
           await _channel.invokeMethod<void>(
             'launchBlockScreen',
-            {'packageName': limit.packageName},
+            {
+              'packageName': limit.packageName,
+              // Hard-blocked (parent toggled the block switch) vs.
+              // soft-blocked (time budget exhausted). The native side
+              // uses this to pick the right dialog — an unblock request
+              // with no time selector vs. an extra-time request with a
+              // 15/30/60/… spinner.
+              'isBlocked': limit.isBlocked,
+            },
           );
           break;
         }

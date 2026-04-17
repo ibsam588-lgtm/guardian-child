@@ -204,9 +204,19 @@ class MainActivity : FlutterActivity() {
 
                     "launchBlockScreen" -> {
                         val blockedPkg = call.argument<String>("packageName") ?: ""
+                        val isBlocked = call.argument<Boolean>("isBlocked") ?: false
                         try {
                             val intent = Intent(applicationContext, AppBlockedActivity::class.java).apply {
                                 putExtra("packageName", blockedPkg)
+                                // Tell AppBlockedActivity which kind of dialog to
+                                // show: a parent-blocked app gets an unblock
+                                // request (no time selector); a time-limit-reached
+                                // app gets the extra-time request with spinner.
+                                putExtra(
+                                    AppBlockedActivity.EXTRA_REASON,
+                                    if (isBlocked) AppBlockedActivity.REASON_BLOCKED
+                                    else AppBlockedActivity.REASON_LIMIT_REACHED
+                                )
                                 // FLAG_ACTIVITY_NEW_TASK is required when starting from a
                                 // non-Activity context (applicationContext). CLEAR_TOP ensures
                                 // only one block screen instance exists at a time.
