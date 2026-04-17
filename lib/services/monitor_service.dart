@@ -471,6 +471,46 @@ class MonitorService extends ChangeNotifier {
           'date': dateStr,
           'updatedAt': FieldValue.serverTimestamp(),
         });
+
+        // Also stamp each appLimits doc with the current minutes used.
+        // Parent-side consumers (ChildCommandService._listenToAppLimits
+        // for over-limit detection, child_home_screen.dart for the
+        // 'used X / Y min' display) read dailyUsageMinutes off the
+        // appLimits doc — not the app_usage subcollection. Confirmed
+        // via live Firestore inspection: time-limit apps had no
+        // dailyUsageMinutes field, which is why time-limit
+        // enforcement appeared broken and the parent UI always
+        // showed 0 minutes used. Batched so a handful of apps don't
+        // rack up write calls.
+        try {
+          final batch = _db.batch();
+          var touched = 0;
+          for (final entry in raw.entries) {
+            final pkg = entry.key as String? ?? '';
+            final mins = (entry.value as num?)?.toInt() ?? 0;
+            if (pkg.isEmpty || mins < 0) continue;
+            // Only write for apps the parent has configured a limit
+            // or block for — we don't want to create appLimits docs
+            // for every installed app.
+            if (!limitsByPkg.containsKey(pkg)) continue;
+            batch.set(
+                _db
+                    .collection('children')
+                    .doc(childId)
+                    .collection('appLimits')
+                    .doc(pkg),
+                {
+                  'dailyUsageMinutes': mins,
+                  'dailyUsageDate': dateStr,
+                  'lastUsageSync': FieldValue.serverTimestamp(),
+                },
+                SetOptions(merge: true));
+            touched++;
+          }
+          if (touched > 0) await batch.commit();
+        } catch (e) {
+          debugPrint('appLimits usage stamp failed: $e');
+        }
       }
     } on MissingPluginException {
       // Running in test / simulator
@@ -1032,13 +1072,53 @@ class MonitorService extends ChangeNotifier {
           radiusMeters: radius,
         ));
       }
+      final prevFenceIds = _activeFences.map((f) => f.id).toSet();
       _activeFences = fences;
+      final currFenceIds = fences.map((f) => f.id).toSet();
       // If a fence the child was inside was just deleted or deactivated,
       // drop it from the inside-set so we don't fire a spurious exit
       // alert the next time we evaluate.
       _fencesCurrentlyInside.removeWhere(
           (id) => _activeFences.every((f) => f.id != id));
       debugPrint('GeoFence: ${_activeFences.length} active fence(s) loaded');
+
+      // When a NEW fence appears in the subscription after the child's
+      // geofence baseline was already established (common case: parent
+      // creates a zone while the child app is already running), we
+      // need to evaluate it now — otherwise the fence will sit there
+      // silently, never firing an alert, because no enter/exit
+      // transition ever happens against it. Re-evaluation against the
+      // last cached position picks up any fence the child starts
+      // outside of at add-time, which then goes through the same
+      // baseline-outside path and gets an initial alert + repeat
+      // timer seed.
+      final newFenceIds = currFenceIds.difference(prevFenceIds);
+      if (newFenceIds.isNotEmpty && !_geofenceBaselineNeeded) {
+        final lat = _lastLat;
+        final lng = _lastLng;
+        if (lat != null && lng != null) {
+          for (final newId in newFenceIds) {
+            final fence = fences.firstWhere((f) => f.id == newId);
+            final inside = _haversineMeters(lat, lng, fence.lat, fence.lng) <=
+                fence.radiusMeters;
+            if (inside) {
+              _fencesCurrentlyInside.add(newId);
+            } else {
+              // Seed the repeat timer + fire initial outside alert.
+              _lastOutsideAlertTs[newId] =
+                  DateTime.now().millisecondsSinceEpoch;
+              unawaited(_writeFenceAlert(
+                childId,
+                fence,
+                entered: false,
+                lat: lat,
+                lng: lng,
+                isRepeat: false,
+              ));
+            }
+          }
+        }
+      }
     }, onError: (e) {
       debugPrint('GeoFence subscription error: $e');
     });
@@ -1071,6 +1151,35 @@ class MonitorService extends ChangeNotifier {
         ..addAll(nowInside);
       _geofenceBaselineNeeded = false;
       debugPrint('GeoFence: baseline set — inside ${nowInside.length} zone(s)');
+
+      // Any active fence the child is already OUTSIDE of at baseline
+      // time gets:
+      //   (a) an initial "outside" alert written so the parent isn't
+      //       waiting for a transition that will never come. This is
+      //       what was broken: the fence was created while the child
+      //       was outside, no enter→exit transition ever happens,
+      //       and the repeat timer also stayed silent because it
+      //       keys off _lastOutsideAlertTs which was never seeded.
+      //   (b) _lastOutsideAlertTs seeded so the 30s repeat timer
+      //       starts its 60s repeat cadence immediately.
+      //
+      // Guarded: if the child is INSIDE a fence at baseline we do
+      // nothing, which preserves the original behaviour (no fake
+      // exit on restart) while fixing the genuinely-outside-at-start
+      // case the parent hit.
+      final seedTs = DateTime.now().millisecondsSinceEpoch;
+      for (final fence in _activeFences) {
+        if (nowInside.contains(fence.id)) continue;
+        _lastOutsideAlertTs[fence.id] = seedTs;
+        unawaited(_writeFenceAlert(
+          childId,
+          fence,
+          entered: false,
+          lat: lat,
+          lng: lng,
+          isRepeat: false,
+        ));
+      }
       return;
     }
 
