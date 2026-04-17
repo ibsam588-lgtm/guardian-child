@@ -1167,6 +1167,22 @@ class MonitorService extends ChangeNotifier {
       debugPrint(
           'GeoFence: alert written — $type for ${fence.name}${isRepeat ? ' [repeat]' : ''}');
 
+      // Diagnostic breadcrumb so the parent can tell whether geofence
+      // alerts are firing at all. Surfaced on the parent Alerts tab
+      // (a 'Geofence diagnostics' strip) so we don't need adb access
+      // to debug 'alerts still aren't working' reports — you can see
+      // from the parent app whether the child is writing alerts.
+      try {
+        await _db.collection('children').doc(childId).set({
+          'lastFenceAlertTs': FieldValue.serverTimestamp(),
+          'lastFenceAlertType': type,
+          'lastFenceAlertName': fence.name,
+          'lastFenceAlertIsRepeat': isRepeat,
+        }, SetOptions(merge: true));
+      } catch (_) {
+        // Non-fatal — diagnostics failure shouldn't block the alert path.
+      }
+
       // Also post a local notification on the child's own phone. The
       // parent gets an FCM push via the onGeofenceAlert cloud function
       // triggered by the /alerts write above; the child gets this

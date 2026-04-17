@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -35,6 +36,11 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
   bool _sending = false;
   bool _sent = false;
   String _status = 'pending';
+  /// ID of the timeRequests doc backing this request. Captured on
+  /// submit or carried in from widget.requestId when we re-enter the
+  /// screen to watch an already-sent request. Used by the Cancel
+  /// Request button to target the right doc.
+  String? _requestId;
   StreamSubscription? _watchSub;
 
   final List<_TimeOption> _options = const [
@@ -48,6 +54,7 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
     super.initState();
     if (widget.requestId != null) {
       _sent = true;
+      _requestId = widget.requestId;
       _watchRequest(widget.requestId!);
     }
   }
@@ -78,7 +85,10 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
     setState(() { _sending = false; });
 
     if (docId != null) {
-      setState(() { _sent = true; });
+      setState(() {
+        _sent = true;
+        _requestId = docId;
+      });
       // Watch for parent's response now that we have the doc ID.
       _watchRequest(docId);
     } else {
@@ -331,6 +341,21 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
           ),
         ),
         const SizedBox(height: 40),
+        if (_status == 'pending')
+          OutlinedButton.icon(
+            onPressed: _cancelRequest,
+            icon: const Icon(Icons.close, color: AppTheme.secondary),
+            label: const Text('Cancel Request',
+                style: TextStyle(
+                    color: AppTheme.secondary, fontWeight: FontWeight.w700)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: AppTheme.secondary, width: 1.5),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 24, vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
         if (_status != 'pending')
           ElevatedButton(
             onPressed: () => context.go('/home'),
@@ -338,6 +363,37 @@ class _TimeRequestScreenState extends State<TimeRequestScreen> {
           ),
       ],
     );
+  }
+
+  /// Called when the child taps Cancel Request while waiting. Deletes
+  /// the timeRequests doc entirely so the parent's home screen no
+  /// longer shows it as pending. Safer than a status update because
+  /// the parent's listener filters by status and we don't want a
+  /// "cancelled" tombstone cluttering their Requests tab.
+  Future<void> _cancelRequest() async {
+    final requestId = _requestId;
+    if (requestId == null || requestId.isEmpty) {
+      // Can't cancel what we don't have a reference to.
+      if (mounted) context.go('/home');
+      return;
+    }
+    try {
+      await FirebaseFirestore.instance
+          .collection('timeRequests')
+          .doc(requestId)
+          .delete();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Request cancelled')));
+        context.go('/home');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Could not cancel: $e'),
+            backgroundColor: AppTheme.secondary));
+      }
+    }
   }
 }
 
