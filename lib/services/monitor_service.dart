@@ -621,8 +621,18 @@ class MonitorService extends ChangeNotifier {
     }
   }
 
-  /// Drains URLs captured by BrowserMonitorService and writes them to
-  /// children/{childId}/browser_history/recent, merging with existing entries.
+  /// Drains URLs captured by BrowserMonitorService and writes them as
+  /// individual per-visit documents to children/{childId}/browser_history/.
+  ///
+  /// The native BrowserMonitorService already writes directly to Firestore
+  /// via col.add() for each URL it captures. This Dart-side sync is a
+  /// fallback for the in-memory queue entries (e.g. when native Firestore
+  /// writes failed due to a Firebase init race at boot). Previously this
+  /// method wrote to a single browser_history/recent document with an
+  /// embedded entries array — that format is filtered out by the parent app
+  /// (which queries the subcollection and explicitly skips doc id 'recent'),
+  /// so those writes were invisible. Now we write individual documents that
+  /// match the native service's schema: {url, browser, visitedAt}.
   Future<void> _syncBrowserHistory(String childId) async {
     try {
       final jsonStr = await _channel
@@ -633,40 +643,26 @@ class MonitorService extends ChangeNotifier {
 
       if (parsed.isEmpty) return;
 
-      final ref = _db
+      final col = _db
           .collection('children')
           .doc(childId)
-          .collection('browser_history')
-          .doc('recent');
+          .collection('browser_history');
 
-      // Read existing entries to merge
-      final existingSnap = await ref.get();
-      final existingList = ((existingSnap.data()?['entries'] as List?) ?? [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-
-      final newEntries = parsed.whereType<Map>().map((e) {
+      int uploaded = 0;
+      for (final raw in parsed.whereType<Map>()) {
+        final url = raw['url'] as String? ?? '';
+        if (url.isEmpty) continue;
         final ts = DateTime.fromMillisecondsSinceEpoch(
-            (e['timestamp'] as num?)?.toInt() ?? 0);
-        return <String, dynamic>{
-          'url':       e['url']     as String? ?? '',
-          'browser':   e['browser'] as String? ?? 'browser',
+            (raw['timestamp'] as num?)?.toInt() ?? 0);
+        await col.add(<String, dynamic>{
+          'url':       url,
+          'browser':   raw['browser'] as String? ?? '',
           'visitedAt': Timestamp.fromDate(ts),
-        };
-      }).toList();
+        });
+        uploaded++;
+      }
 
-      final merged = [...existingList, ...newEntries];
-      // Cap at 100 entries
-      final capped =
-          merged.length > 100 ? merged.sublist(merged.length - 100) : merged;
-
-      await ref.set({
-        'entries':   capped,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-
-      debugPrint('BrowserSync: uploaded ${newEntries.length} URL(s)');
+      if (uploaded > 0) debugPrint('BrowserSync: uploaded $uploaded URL(s)');
     } on MissingPluginException {
       // Accessibility service not available (simulator / no channel)
     } on PlatformException catch (e) {
