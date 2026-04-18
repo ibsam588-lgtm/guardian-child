@@ -1094,6 +1094,7 @@ class MonitorService extends ChangeNotifier {
           lat: lat,
           lng: lng,
           radiusMeters: radius,
+          muteAlerts: d['muteAlerts'] as bool? ?? false,
         ));
       }
       final prevFenceIds = _activeFences.map((f) => f.id).toSet();
@@ -1305,6 +1306,11 @@ class MonitorService extends ChangeNotifier {
     required double lng,
     bool isRepeat = false,
   }) async {
+    // Parent has muted alerts for this specific geofence — skip entirely.
+    if (fence.muteAlerts) {
+      debugPrint('GeoFence: alerts muted for ${fence.name} — skipping');
+      return;
+    }
     try {
       // Look up parentUid from the child doc so the alert is correctly
       // scoped — the Alerts tab filters by parentUid == auth.uid.
@@ -1419,12 +1425,14 @@ class _GeoFenceRecord {
   final double lat;
   final double lng;
   final double radiusMeters;
+  final bool muteAlerts;
   const _GeoFenceRecord({
     required this.id,
     required this.name,
     required this.lat,
     required this.lng,
     required this.radiusMeters,
+    this.muteAlerts = false,
   });
 
   /// Placeholder used when a fence referenced in the inside-set is no
