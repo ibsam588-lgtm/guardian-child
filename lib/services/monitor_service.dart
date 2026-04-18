@@ -232,6 +232,11 @@ class MonitorService extends ChangeNotifier {
     // Sync communications once on start
     unawaited(_reportCommunications(childId));
 
+    // Report app usage immediately on start — without this, the first upload
+    // was delayed by the full 2-minute timer tick, leaving the parent dashboard
+    // empty every time the child app was restarted.
+    unawaited(_reportAppUsage(childId));
+
     // Frequent enforcement check every 15 seconds so blocked apps are stopped
     // much faster than waiting for the 2-minute heartbeat.
     _frequentEnforcementTimer = Timer.periodic(
@@ -416,12 +421,25 @@ class MonitorService extends ChangeNotifier {
         }
       }
 
+      // Stamp whether the child has granted PACKAGE_USAGE_STATS so the parent
+      // dashboard can show a targeted "grant Usage Access" prompt instead of a
+      // generic "no data yet" message when app-usage data is missing.
+      bool hasUsageAccess = false;
+      try {
+        hasUsageAccess =
+            await _channel.invokeMethod<bool>('hasUsageStatsPermission') ??
+                false;
+      } on MissingPluginException {
+        // simulator / test — no native channel
+      } catch (_) {}
+
       // Clamp battery to [0,1] and exclude non-finite GPS values before writing.
       final Map<String, dynamic> update = {
         'isOnline': true,
         'lastSeen': FieldValue.serverTimestamp(),
         'batteryLevel': (batteryLevel.clamp(0, 100)) / 100.0,
         'lastLocation': locationStr,
+        'hasUsageAccess': hasUsageAccess,
       };
       if (lat != null && lng != null && lat.isFinite && lng.isFinite) {
         update['lastLat'] = lat;
