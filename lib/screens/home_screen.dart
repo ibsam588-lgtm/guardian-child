@@ -526,9 +526,10 @@ class _RecentRequests extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 24),
           itemCount: topDocs.length,
           itemBuilder: (_, i) {
-            final d = topDocs[i].data() as Map<String, dynamic>;
+            final doc = topDocs[i];
+            final d = doc.data() as Map<String, dynamic>;
             final status = d['status'] ?? 'pending';
-            return _RequestTile(appName: d['appName'] ?? '', status: status, minutes: d['requestedMinutes'] ?? 15);
+            return _RequestTile(appName: d['appName'] ?? '', status: status, minutes: d['requestedMinutes'] ?? 15, docId: doc.id);
           },
         );
       },
@@ -540,7 +541,8 @@ class _RequestTile extends StatelessWidget {
   final String appName;
   final String status;
   final int minutes;
-  const _RequestTile({required this.appName, required this.status, required this.minutes});
+  final String? docId;
+  const _RequestTile({required this.appName, required this.status, required this.minutes, this.docId});
 
   @override
   Widget build(BuildContext context) {
@@ -557,6 +559,7 @@ class _RequestTile extends StatelessWidget {
       default:
         statusColor = AppTheme.warning; statusIcon = Icons.hourglass_top_rounded; statusLabel = 'Pending';
     }
+    final isResolved = status == 'approved' || status == 'denied';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(14),
@@ -581,6 +584,28 @@ class _RequestTile extends StatelessWidget {
             ),
             child: Text(statusLabel, style: TextStyle(fontSize: 11, color: statusColor, fontWeight: FontWeight.w600)),
           ),
+          // Resolved (approved/denied) requests can be dismissed by the child.
+          if (isResolved && docId != null) ...[
+            const SizedBox(width: 4),
+            GestureDetector(
+              onTap: () async {
+                try {
+                  await FirebaseFirestore.instance
+                      .collection('timeRequests')
+                      .doc(docId)
+                      .delete();
+                } catch (e) {
+                  debugPrint('dismiss request error: $e');
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Could not dismiss: $e')),
+                    );
+                  }
+                }
+              },
+              child: Icon(Icons.close_rounded, size: 18, color: Colors.grey[400]),
+            ),
+          ],
         ],
       ),
     );
@@ -624,22 +649,32 @@ class _ClearAllButtonState extends State<_ClearAllButton> {
 
     try {
       final db = FirebaseFirestore.instance;
+      debugPrint('_clearAll: querying timeRequests for childId=${widget.childId}');
       final snap = await db
           .collection('timeRequests')
           .where('childId', isEqualTo: widget.childId)
           .get();
+      debugPrint('_clearAll: found ${snap.docs.length} docs to delete');
+      if (snap.docs.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('No requests to clear.')),
+        );
+        return;
+      }
       final batch = db.batch();
       for (final doc in snap.docs) {
+        debugPrint('_clearAll: deleting doc ${doc.id}');
         batch.delete(doc.reference);
       }
       await batch.commit();
+      debugPrint('_clearAll: batch commit succeeded');
       messenger.showSnackBar(
         const SnackBar(content: Text('All requests cleared.')),
       );
     } catch (e) {
       debugPrint('_clearAll error: $e');
       messenger.showSnackBar(
-        const SnackBar(content: Text('Could not clear requests. Try again.')),
+        SnackBar(content: Text('Could not clear requests: $e')),
       );
     } finally {
       if (mounted) setState(() => _loading = false);
