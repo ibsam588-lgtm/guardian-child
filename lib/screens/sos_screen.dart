@@ -115,7 +115,7 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       setState(() { _sending = false; _sent = true; });
 
       // Immediately call the first emergency contact on file.
-      unawaited(_callFirstEmergencyContact(childId));
+      unawaited(_callFirstEmergencyContact(childId, parentUid));
 
       // Auto-cancel SOS active flag after 30 seconds (parent will have seen it).
       // Capture childId into a local so the callback never dereferences a
@@ -140,40 +140,63 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
     }
   }
 
-  Future<void> _callFirstEmergencyContact(String childId) async {
+  Future<void> _callFirstEmergencyContact(
+      String childId, String parentUid) async {
     try {
-      final snapshot = await FirebaseFirestore.instance
+      // Contacts are stored under the parent's document:
+      //   users/{parentUid}/emergency_contacts  (written by guardian-app,
+      //   mirrored to children/{childId}/emergency_contacts for child access).
+      // Query the child-side mirror first; fall back to parent collection.
+      QuerySnapshot<Map<String, dynamic>> snapshot = await FirebaseFirestore
+          .instance
           .collection('children')
           .doc(childId)
           .collection('emergency_contacts')
+          .orderBy('order')
           .limit(1)
           .get();
+
+      if (snapshot.docs.isEmpty) {
+        // Fall back to parent collection (e.g. contacts added before the
+        // dual-write was in place).
+        snapshot = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(parentUid)
+            .collection('emergency_contacts')
+            .orderBy('order')
+            .limit(1)
+            .get();
+      }
 
       if (snapshot.docs.isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('No emergency contact on file. Ask your parent to add one.'),
+            content: Text(
+                'No emergency contact on file. Ask your parent to add one.'),
           ),
         );
         return;
       }
 
       final data = snapshot.docs.first.data();
-      final phone = ((data['phone'] ?? data['phoneNumber'] ?? '') as String).trim();
+      final phone =
+          ((data['phone'] ?? data['phoneNumber'] ?? '') as String).trim();
 
       if (phone.isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Emergency contact has no phone number on file.')),
+          const SnackBar(
+              content:
+                  Text('Emergency contact has no phone number on file.')),
         );
         return;
       }
 
       final uri = Uri(scheme: 'tel', path: phone);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      }
+      // LaunchMode.externalApplication ensures the dialler app opens even
+      // if the tel: scheme would otherwise be handled in-app.
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (e) {
       debugPrint('Emergency call error: $e');
     }
