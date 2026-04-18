@@ -10,6 +10,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.google.firebase.FirebaseApp
 import com.google.firebase.Timestamp
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -135,6 +136,8 @@ class BrowserMonitorService : AccessibilityService() {
     //   (d) everything working (urlsCaptured > 0)
     private var eventsSeen: Long = 0
     private var urlsCaptured: Long = 0
+    private var writesAttempted: Long = 0
+    private var writesFailed: Long = 0
     private var lastBrowserPkg: String = ""
     private var lastEventTs: Long = 0
     private var lastExtractSample: String = ""
@@ -379,7 +382,7 @@ class BrowserMonitorService : AccessibilityService() {
         val entry = hashMapOf<String, Any>(
             "url"       to url,
             "browser"   to packageName,
-            "visitedAt" to Timestamp.now(),
+            "visitedAt" to FieldValue.serverTimestamp(),
         )
         if (searchQuery.isNotEmpty()) {
             entry["searchQuery"] = searchQuery
@@ -394,8 +397,10 @@ class BrowserMonitorService : AccessibilityService() {
             .document(childId)
             .collection("browser_history")
 
+        writesAttempted += 1
         col.add(entry)
             .addOnFailureListener { e ->
+                writesFailed += 1
                 Log.w(TAG, "browser_history add failed: ${e.message}")
             }
 
@@ -679,6 +684,8 @@ class BrowserMonitorService : AccessibilityService() {
             val data = hashMapOf<String, Any>(
                 "eventsSeen"      to eventsSeen,
                 "urlsCaptured"    to urlsCaptured,
+                "writesAttempted" to writesAttempted,
+                "writesFailed"    to writesFailed,
                 "lastBrowserPkg"  to lastBrowserPkg,
                 "lastEventTs"     to lastEventTs,
                 "lastExtractSample" to lastExtractSample,
