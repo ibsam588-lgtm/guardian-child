@@ -4,7 +4,7 @@
 ![Dart](https://img.shields.io/badge/Dart-3.4-0175C2?logo=dart&logoColor=white)
 ![Firebase](https://img.shields.io/badge/Firebase-Firestore%20%7C%20Auth%20%7C%20FCM-FFCA28?logo=firebase&logoColor=black)
 ![Android](https://img.shields.io/badge/Android-API%2026%2B-3DDC84?logo=android&logoColor=white)
-![Version](https://img.shields.io/badge/Version-1.0.17-blue)
+![Version](https://img.shields.io/badge/Version-1.0.18-blue)
 ![CI](https://img.shields.io/github/actions/workflow/status/ibsam588-lgtm/guardian-child/ci.yml?label=CI&logo=githubactions&logoColor=white)
 ![License](https://img.shields.io/badge/License-Proprietary-red)
 
@@ -16,87 +16,53 @@ The **child-device half** of the GuardIan parental-control system. This app is i
 
 ## Table of Contents
 
-1. [What This App Does](#what-this-app-does)
-2. [Recent Changes — v1.0.17](#recent-changes--v1017)
-3. [Recent Changes — v1.0.16](#recent-changes--v1016)
+1. [What Guardian Child Is](#what-guardian-child-is)
+2. [Key Features](#key-features)
 3. [Architecture](#architecture)
 4. [Native Services](#native-services)
-5. [Required Permissions](#required-permissions)
-6. [Firestore Schema (Child-Written Paths)](#firestore-schema-child-written-paths)
-7. [Setup & Installation](#setup--installation)
-8. [Pairing Flow](#pairing-flow)
-9. [CI/CD](#cicd)
+5. [Tech Stack](#tech-stack)
+6. [Required Permissions](#required-permissions)
+7. [Firestore Schema (Child-Written Paths)](#firestore-schema-child-written-paths)
+8. [Setup & Installation](#setup--installation)
+9. [Pairing Flow](#pairing-flow)
+10. [CI/CD](#cicd)
 
 ---
 
-## What This App Does
+## What Guardian Child Is
 
-Once paired to a parent account via a 6-digit code, this app:
+Guardian Child is the companion Android app that runs on the child's device as part of the GuardIan parental-control system. Once paired to a parent account, the app runs silently in the background as an Android foreground service, continuously reporting device activity to Firebase Firestore. The parent's Guardian app reads this data in real time to monitor location, app usage, browser activity, and communications.
 
-- Reports GPS location on significant movement (≥50 m) and on a 30-second heartbeat.
-- Evaluates every location update against the parent-defined geofences and writes `geofence_enter` / `geofence_exit` alerts to Firestore on transition.
-- Tracks foreground app usage via `UsageStatsManager` and enforces parent-set daily limits by launching a full-screen `AppBlockedActivity` that the child cannot dismiss with the back button.
-- Captures browser URL bar contents across all major browsers through an `AccessibilityService`, writing them directly to Firestore from native Kotlin so sync survives the Flutter engine being paused or the app being killed from recents.
-- On parent command, starts an ambient-listen session that records the microphone in 5-second AAC chunks and streams them to Firestore for the parent to play back.
-- On parent command, plays a maximum-volume looping siren that cannot be silenced without the parent stopping it remotely.
-- Sends an SOS alert with current location when the child taps the SOS button.
-- Is protected from uninstall by a `DeviceAdminReceiver` — removing the app requires first revoking Device Admin in system settings.
+The app is designed to be tamper-resistant: it survives device reboots via a `BootReceiver`, is protected from uninstall by a `DeviceAdminReceiver`, and its core monitoring pipeline runs in native Kotlin services that remain active even when the Flutter engine is paused by the OS.
 
 ---
 
-## Recent Changes — v1.0.17
+## Key Features
 
-| # | Area | Change |
-|---|------|--------|
-| UI filter | Time app screen | `appLimitsForUi` getter hides apps with `isEnabled: false` AND `isBlocked: false`. Parent-disabled apps no longer appear in the child Time app list |
-| Model | AppLimitInfo | Added `dailyUsageMinutes` field read from the appLimits doc's usage stamp. Ready for upcoming progress-bar rendering |
-| Browser regression | URL-empty fallback | Reverted v1.0.16 synthesizer that queued `about:blank` / synthetic-search entries on every empty-URL event. That was flooding browser_history and breaking the Browser Activity tab |
-| Browser | Google widget path | Gated to `TYPE_VIEW_TEXT_CHANGED` only, requires query of 3+ chars containing a letter, dedupes via `last_widget_query` pref |
-| Browser config | accessibility_service_config.xml | Added `typeViewTextChanged` to the event subscription so the hardened widget path actually fires |
+### Browser Activity Monitoring
+A Kotlin `AccessibilityService` (`BrowserMonitorService`) intercepts `TYPE_WINDOW_CONTENT_CHANGED` and `TYPE_VIEW_TEXT_CHANGED` events across all major browsers (Chrome, Firefox, Edge, Samsung Internet, and the Google Search widget). It extracts URL bar text and page titles, deduplicates transient states (e.g., `Loading...`), and writes each visit as a discrete Firestore document under `children/{childId}/browser_history/`. Writes happen directly from Kotlin so data is captured even when the Flutter engine is suspended.
 
----
+### App Usage Tracking and Enforcement
+`UsageStatsManager` is polled on a 2-minute cycle to report per-app foreground usage to Firestore. The parent can set a daily time limit (in minutes) or hard-block any app. The child app evaluates enforcement every 15 seconds: if a blocked or over-limit app is in the foreground, `AppBlockedActivity` is launched as a full-screen overlay that suppresses the back button. The child can optionally submit a time-extension request from the block screen.
 
-## Recent Changes — v1.0.16
+### SOS Button
+The child's home screen features a prominent SOS button. Tapping it writes an `sos` alert doc to the top-level `alerts` collection (with current GPS coordinates), triggers an FCM push to the parent, and automatically initiates a phone call to the first emergency contact stored in `children/{childId}/emergencyContacts`. The SOS screen can also be triggered remotely by the parent via a `child_commands` Firestore document.
 
-Follow-on fixes from live-Firestore-driven investigation.
+### Geofence Entry/Exit Reporting
+The app subscribes to the parent-defined geofences in `children/{childId}/geo_fences/`. Every GPS update (fired on ≥50 m movement and on a 30-second heartbeat) is evaluated against active fences. On a state transition the app writes a `geofence_enter` or `geofence_exit` alert to Firestore, posts a local notification on the child device, and triggers an FCM push to the parent. A 60-second repeat timer fires `isRepeat: true` alerts while the child remains outside an active fence. Fences flagged as muted by the parent are silently skipped.
 
-| # | Area | Change |
-|---|------|--------|
-| Comms | SMS | Query Inbox, Sent, Outbox URIs explicitly and merge with dedup. `Telephony.Sms.CONTENT_URI` returns inbox-only on modern Samsung One UI unless the caller is the default SMS app — confirmed via live Firestore that only `type='received'` rows were being captured |
-| Comms | Window | Call log + SMS queries widened from 24h to 7 days so the parent card (also 7-day) isn't empty on days the child had no recent activity |
-| Comms | Call types | Added `VOICEMAIL_TYPE` and `BLOCKED_TYPE` to the call-type mapping so those don't fall through to `unknown` |
-| Browser | Google Widget | `com.google.android.googlequicksearchbox` + Samsung Finder now have a dedicated fast-path that captures the typed query directly from the EditText and synthesizes a `google.com/search?q=` URL |
-| Browser | Edge | Expanded Microsoft Edge URL-bar IDs (`omnibox_text`, `search_box_text`) |
-| Browser | Firefox | Expanded Fenix IDs (`mozac_browser_toolbar_edit_url_view`, `awesome_bar_edit_text`, `toolbar_wrapper`) + URL-empty fallback writes a browser_history entry from pageTitle / titleQuery when URL extraction fails |
+### Request System
+The child can submit two types of requests to the parent from within the app:
+- **Time request** — asks for additional minutes for a specific app that has hit its daily limit.
+- **App install request** — asks the parent to approve installing a new app.
 
----
+Requests are written to the top-level `timeRequests` collection with `status: "pending"`. The child can cancel a pending request, and resolved requests (approved or denied) can be dismissed from the requests screen.
 
-## Recent Changes — v1.0.15
+### Mute Alerts
+The parent app can flag individual geofences as muted. When a fence is muted, the child app skips writing entry/exit alerts for that fence, preventing notification noise without fully disabling the fence.
 
-Runtime bug-fix arc v1.0.7 through v1.0.15, investigated against live Firestore data.
-
-| # | Area | Change |
-|---|------|--------|
-| AR | Geofence | Baseline now seeds `_lastOutsideAlertTs` and fires an initial "outside" alert for any active fence the child starts outside of. Also re-evaluates when a new fence appears in the Firestore subscription mid-session. Confirmed root cause: fences created while child was already outside never generated an enter→exit transition, so no alert ever fired |
-| AJ | Geofence | Every-1-minute "still outside" reminder alerts via `_geofenceRepeatTimer` (30-second tick, 60-second floor per fence). `isRepeat: true` flag on the alert doc so the cloud function can branch the push copy |
-| AH | Geofence | Child device now posts a local high-priority notification on every enter/exit/repeat transition via `MainActivity.showGeofenceLocalNotification`, in addition to the FCM push the parent gets via the cloud function |
-| AL | Enforcement | `AppLimitInfo.fromMap` drops the legacy `(isEnabled && limit == 0)` derivation of `isBlocked`. Matches the parent-side enforcement policy |
-| Usage sync | Enforcement | `_reportAppUsage` now stamps `dailyUsageMinutes` + `dailyUsageDate` + `lastUsageSync` back onto each `appLimits/{pkg}` doc. Without this, parent-side time-limit detection always saw 0 minutes used and never triggered over-limit blocks |
-| AQ | Browser | `findPageTitle` walks the accessibility tree for a plausible page-title node, preferring `paneTitle` on Android O+. Written as an optional `pageTitle` field on each browser_history doc |
-| AQ | Browser | `looksLikeUrl` now rejects Chrome's transient URL-bar placeholders (`Loading...`, `Connecting`, `Redirecting`, etc.) and requires at least one letter in the captured text. Confirmed via live Firestore that `url: "Loading..."` was a common garbage capture |
-| X | Retention | Browser history and communications older than 7 days auto-pruned every 2 hours |
-| AO | Requests | Child can now cancel a pending time request via a "Cancel Request" button that deletes the `timeRequests` doc |
-| AC | App block | Modern themed unblock dialog in `AppBlockedActivity` with a `BadTokenException` guard and a time-picker spinner (hidden for pure unblock requests) |
-
----
-
-## Recent Changes — v1.0.6 (bug-sweep)
-
-| # | Area | Change |
-|---|------|--------|
-| 3B | Geofence | New child-side enforcement: every location update is checked against active zones, and enter/exit transitions fire `geofence_enter` / `geofence_exit` alerts. First-tick baseline prevents spurious alerts on app restart. |
-| 5/6 | Listen Live | Fixed a method-channel mismatch between the Dart `CommandService` (calling `startListen` / `stopListen`) and `MainActivity` (which only registered `startRecording` / `stopRecording`). Parent's "Connecting…" state now progresses. Because `ListenService` is already a foreground service, fixing #5 also fixes #6 (mic previously only worked while the child app was foregrounded). |
-| 7 | Permissions UX | Permission onboarding screen wrapped in `SafeArea` with an explicit `MediaQuery.viewPadding.bottom` inset so the Continue button is never clipped by the system gesture pill on tall-chin devices. |
+### Ambient Listen and Siren (Parent-Initiated)
+The parent can remotely start an ambient-listen session. `ListenService` records 5-second AAC audio chunks (16 kHz / 24 kbps mono), base64-encodes them, and writes them to `children/{childId}/listen_chunks/`. A 15-minute absolute TTL acts as a battery safety cut-off. The parent can also trigger a maximum-volume looping siren via `SirenService` that cannot be silenced from the child device.
 
 ---
 
@@ -110,7 +76,7 @@ Runtime bug-fix arc v1.0.7 through v1.0.15, investigated against live Firestore 
 │        → pairing         │      │    (foreground loc)   │
 │        → home / SOS      │      │                       │
 │                          │      │  ListenService.kt     │
-│  MonitorService (Dart)   │◄─────►  BrowserMonitor.kt    │
+│  MonitorService (Dart)   │◄─────►  BrowserMonitorService│
 │    timers:               │  MC  │    (accessibility)    │
 │      30s heartbeat       │      │                       │
 │      2m usage/comms      │      │  AppBlockedActivity   │
@@ -134,7 +100,7 @@ Runtime bug-fix arc v1.0.7 through v1.0.15, investigated against live Firestore 
 
 **MC** = MethodChannel (`com.guardian.child/monitor`).
 
-**Why some things write to Firestore natively**: browser URL capture and ambient-listen audio chunks are written to Firestore **directly from Kotlin**, not through Dart. This is deliberate — if the Flutter engine is paused (e.g., the OS reclaims memory while the child uses another app) the Dart timers stop firing but native services keep running, so a pure Dart pipeline would drop data. The pref-backed queue + Dart drain remains as a fallback for when native writes fail (offline, auth not yet ready, etc.).
+**Why some things write to Firestore natively**: browser URL capture and ambient-listen audio chunks are written to Firestore **directly from Kotlin**, not through Dart. This is deliberate — if the Flutter engine is paused (e.g., the OS reclaims memory while the child uses another app) the Dart timers stop firing but native services keep running, so a pure Dart pipeline would drop data. A SharedPreferences-backed queue plus a Dart drain loop serves as a fallback for when native writes fail (offline, auth not yet ready, etc.).
 
 ---
 
@@ -142,33 +108,54 @@ Runtime bug-fix arc v1.0.7 through v1.0.15, investigated against live Firestore 
 
 | Service | Type | Purpose |
 |---|---|---|
-| `MonitorService.kt` | Foreground (`location`) | Keeps the app alive and holds the location permission. |
-| `ListenService.kt` | Foreground (`microphone`) | Ambient listen. Records 5-second AAC chunks at 16 kHz / 24 kbps mono, base64-encodes them, writes to `children/{id}/listen_chunks`. 15-minute absolute TTL as a battery safety. |
-| `SirenService.kt` | Foreground (`mediaPlayback`) | Loops a loud alarm sound on `STREAM_ALARM`. `stopWithTask=false` so swiping the app from recents doesn't silence it. |
-| `BrowserMonitorService.kt` | Accessibility | Listens to `TYPE_WINDOW_CONTENT_CHANGED` events in browser packages and extracts the URL bar text. Writes to `browser_history/recent` in Firestore and also to a SharedPreferences queue as a fallback. |
-| `BootReceiver.kt` | BroadcastReceiver | Restarts `MonitorService` on `BOOT_COMPLETED` so monitoring resumes after the device reboots. |
-| `GuardianMessagingService.kt` | FCM | Receives push commands from the parent (e.g., siren, SOS trigger). |
-| `AppBlockedActivity.kt` | Activity | Full-screen block overlay shown when the child opens a blocked or over-limit app. Back button suppressed. |
+| `MonitorService.kt` | Foreground (`location`) | Keeps the process alive and holds the location permission while GPS reporting runs. |
+| `BrowserMonitorService.kt` | Accessibility | Listens to `TYPE_WINDOW_CONTENT_CHANGED` and `TYPE_VIEW_TEXT_CHANGED` events across browser packages. Extracts URL bar text and page titles and writes each visit directly to Firestore. |
+| `ListenService.kt` | Foreground (`microphone`) | Ambient listen. Records 5-second AAC chunks at 16 kHz / 24 kbps mono, base64-encodes them, and writes to `children/{id}/listen_chunks`. 15-minute absolute TTL as a battery safety cut-off. |
+| `SirenService.kt` | Foreground (`mediaPlayback`) | Loops a loud alarm sound on `STREAM_ALARM`. `stopWithTask=false` so swiping the app from recents does not silence it. |
+| `AppBlockedActivity.kt` | Activity | Full-screen block overlay shown when the child opens a blocked or over-limit app. Back button suppressed. Includes a time-request picker. |
+| `BootReceiver.kt` | BroadcastReceiver | Restarts `MonitorService` on `BOOT_COMPLETED` so monitoring resumes after a device reboot. |
+| `GuardianMessagingService.kt` | FCM | Receives push commands from the parent (siren, SOS trigger, listen start/stop). |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| UI & app logic | Flutter 3.27 / Dart 3.4 |
+| State management | Provider |
+| Navigation | go_router |
+| Auth | Firebase Authentication |
+| Database | Firebase Firestore (real-time sync) |
+| Push messaging | Firebase Cloud Messaging (FCM) |
+| Crash reporting | Firebase Crashlytics |
+| Background services | Kotlin foreground services (Android API 26+) |
+| Browser monitoring | Android AccessibilityService (Kotlin) |
+| App enforcement | UsageStatsManager + AccessibilityService |
+| Location | geolocator / geocoding |
+| Build | Gradle + flutter build appbundle |
+| CI/CD | GitHub Actions → Google Play internal track |
 
 ---
 
 ## Required Permissions
 
-| Permission | Purpose | Notes |
+| Permission | Purpose | Grant Method |
 |---|---|---|
 | `ACCESS_FINE_LOCATION` | GPS tracking | Runtime prompt |
-| `ACCESS_BACKGROUND_LOCATION` | Location reporting while backgrounded | Android 10+ requires a separate "Allow all the time" selection in system settings |
+| `ACCESS_BACKGROUND_LOCATION` | Location reporting while backgrounded | Android 10+ requires "Allow all the time" in system settings |
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_LOCATION` / `_MICROPHONE` / `_MEDIA_PLAYBACK` | Keep services alive | Android 14+ requires per-type declaration |
-| `RECORD_AUDIO` | Ambient listen | Runtime prompt. The listen service refuses to start without it and writes an "error" state to `listen_status/current`. |
-| `READ_CALL_LOG` | Call monitoring | Runtime prompt |
+| `RECORD_AUDIO` | Ambient listen | Runtime prompt |
+| `READ_CALL_LOG` | Call log monitoring | Runtime prompt |
 | `READ_SMS` | SMS monitoring | Runtime prompt |
-| `PACKAGE_USAGE_STATS` | App usage | **Not a runtime permission** — must be granted in system Usage Access settings; the app deep-links there. |
-| `BIND_ACCESSIBILITY_SERVICE` | App blocking + browser URL capture | Must be enabled in system Accessibility settings; the app deep-links there. |
-| `SYSTEM_ALERT_WINDOW` | Launching `AppBlockedActivity` over other apps | |
-| `RECEIVE_BOOT_COMPLETED` | Restart after reboot | |
+| `READ_CONTACTS` | Resolve emergency contact for auto-call on SOS | Runtime prompt |
+| `PACKAGE_USAGE_STATS` | App usage tracking and enforcement | **Not a runtime permission** — must be granted in system Usage Access settings; the app deep-links there |
+| `BIND_ACCESSIBILITY_SERVICE` | App blocking + browser URL capture | Must be enabled in system Accessibility settings; the app deep-links there |
+| `SYSTEM_ALERT_WINDOW` | Launching `AppBlockedActivity` over other apps | System settings |
+| `RECEIVE_BOOT_COMPLETED` | Restart after reboot | Normal permission |
 | `BIND_DEVICE_ADMIN` | Uninstall protection | Enabled via Device Admin settings |
 | `POST_NOTIFICATIONS` | Foreground service notifications on Android 13+ | Runtime prompt |
-| `VIBRATE`, `WAKE_LOCK` | SOS feedback and keeping services awake | Normal permissions |
+| `VIBRATE`, `WAKE_LOCK` | SOS haptic feedback and keeping services awake | Normal permissions |
 
 ---
 
@@ -189,21 +176,22 @@ children/{childId}/app_usage/{yyyy-MM-dd}
 children/{childId}/installed_apps/current
   apps: [{ appName, packageName, isSystem }], updatedAt
 
-children/{childId}/browser_history/recent        — written natively
-  entries: [{ url, browser, visitedAt }]         — capped at 100
+children/{childId}/browser_history/{autoId}        — written natively
+  url, pageTitle, browser, visitedAt
 
-children/{childId}/listen_chunks/{autoId}        — written natively
+children/{childId}/listen_chunks/{autoId}          — written natively
   data: <base64 AAC>, mime: "audio/aac",
   durationMs, timestamp
 
-children/{childId}/listen_status/current         — written natively
+children/{childId}/listen_status/current           — written natively
   state: "starting" | "recording" | "error" | "stopped"
   message?: string
   updatedAt
 
 alerts/{autoId}
   parentUid, childId, type: "sos" | "geofence_enter" | "geofence_exit",
-  title, message, fenceId?, fenceName?, lat?, lng?, timestamp
+  title, message, fenceId?, fenceName?, lat?, lng?,
+  isRepeat?: bool, timestamp
 
 timeRequests/{autoId}
   parentUid, childId, childName,
@@ -212,7 +200,7 @@ timeRequests/{autoId}
   status: "pending", createdAt, expiresAt
 ```
 
-The child app **reads** `children/{childId}/geo_fences/*`, `children/{childId}/appLimits/*`, and `child_commands` to receive instructions from the parent.
+The child app **reads** `children/{childId}/geo_fences/*`, `children/{childId}/appLimits/*`, `children/{childId}/emergencyContacts/*`, and `child_commands` to receive instructions from the parent.
 
 ---
 
@@ -227,7 +215,7 @@ The child app **reads** `children/{childId}/geo_fences/*`, `children/{childId}/a
 | Java | 17+ |
 | Android SDK | API 26+ target |
 
-### 1. Clone and install
+### 1. Clone and install dependencies
 
 ```bash
 git clone https://github.com/ibsam588-lgtm/guardian-child.git
@@ -235,11 +223,16 @@ cd guardian-child
 flutter pub get
 ```
 
-### 2. Firebase config
+### 2. Firebase setup
 
-Place `google-services.json` (from the same Firebase project used by the parent app) in `android/app/google-services.json`. Both apps must share the same project — that's how they see each other's writes.
+This app and the parent [`guardian-app`](https://github.com/ibsam588-lgtm/guardian-app) must share the same Firebase project — that is how they see each other's Firestore writes.
 
-### 3. Run
+1. Open the [Firebase Console](https://console.firebase.google.com/) and select the project used by the parent app (or create one).
+2. Add an Android app with package name `com.guardian.child`.
+3. Download `google-services.json` and place it at `android/app/google-services.json`.
+4. Enable **Firestore**, **Authentication** (Email/Password or Anonymous), and **Cloud Messaging** in the Firebase Console.
+
+### 3. Run on a device
 
 ```bash
 flutter run
@@ -252,37 +245,55 @@ flutter build appbundle --release
 # Output: build/app/outputs/bundle/release/app-release.aab
 ```
 
+### 5. Permissions onboarding
+
+On first launch the app walks the child (or the person setting up the device) through granting all required permissions. Special-access permissions that cannot be granted at runtime (Usage Access, Accessibility, Device Admin) open directly to the relevant system settings screen.
+
 ---
 
 ## Pairing Flow
 
 1. A parent (on [`guardian-app`](https://github.com/ibsam588-lgtm/guardian-app)) taps **Add Child** and is shown a 6-digit code with a 15-minute TTL, written to `pairing_codes/{code}`.
 2. The child opens this app and enters the code on the pairing screen.
-3. The app creates `children/{childId}` with `parentUid`, `deviceId`, `fcmToken`, etc., marks the pairing code `used: true`, and stores the `childId` in `SharedPreferences` under `flutter.paired_child_id`.
+3. The app looks up the code in Firestore, creates `children/{childId}` with `parentUid`, `deviceId`, `fcmToken`, etc., marks the pairing code `used: true`, and stores the `childId` in `SharedPreferences` under `flutter.paired_child_id`.
 4. `MonitorService` starts and begins reporting.
 
-The child app intentionally has no "unpair" option. To unpair, the parent removes the child from their account; the child app detects the deletion of `children/{childId}` and clears its local state.
+The child app intentionally has no "unpair" option. To unpair, the parent removes the child from their account in the parent app. The child app detects the deletion of `children/{childId}` via a Firestore document listener and clears its local state automatically.
+
+**Manual pairing (development):** You can also pair manually by writing a `children/{childId}` document in Firestore with the correct `parentUid` and setting `flutter.paired_child_id` to the same `childId` via Flutter DevTools or `adb shell`.
 
 ---
 
 ## CI/CD
 
-GitHub Actions runs on every push to `main` and on PRs targeting `main`:
+GitHub Actions runs on every push to `main` and on pull requests targeting `main`. A concurrency guard cancels any in-flight run for the same ref to prevent concurrent Play Store edit conflicts.
 
 ```
-push / PR
-    │
-    ├─► [test] Analyze & Test
-    │       flutter analyze --no-fatal-infos
-    │       flutter test
-    │
-    └─► [build] Build Android  (needs: test)
-            flutter build apk --release
+push to main / PR
+        │
+        ├─► [test] Analyze & Test
+        │       flutter analyze --no-fatal-infos --no-fatal-warnings
+        │       flutter test
+        │
+        └─► [build-and-deploy] Build & Deploy Android  (needs: test, main branch only)
+                flutter build appbundle --release \
+                  --build-number=${{ github.run_number }}
+                → uploads AAB artifact (7-day retention)
+                → deploys to Play Store internal track via
+                  r0adkll/upload-google-play@v1
 ```
 
-### Required Secrets
+### Required Repository Secrets
 
-Same Firebase / keystore secrets as the parent app. See [`guardian-app` README](https://github.com/ibsam588-lgtm/guardian-app#cicd-pipeline) for the full list.
+| Secret | Purpose |
+|---|---|
+| `KEYSTORE_BASE64` | Release keystore, base64-encoded |
+| `KEY_ALIAS` | Key alias within the keystore |
+| `KEY_PASSWORD` | Key password |
+| `STORE_PASSWORD` | Keystore store password |
+| `PLAY_STORE_SERVICE_ACCOUNT_JSON` | Google Play service account JSON for the `r0adkll/upload-google-play` action |
+
+If `KEYSTORE_BASE64` is absent the build falls back to debug signing (useful for fork CI runs). The Play Store deploy step only runs on `main`.
 
 ---
 
