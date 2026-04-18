@@ -588,11 +588,18 @@ class _RequestTile extends StatelessWidget {
 }
 
 // ── Clear All button ───────────────────────────────────────────────────────────
-class _ClearAllButton extends StatelessWidget {
+class _ClearAllButton extends StatefulWidget {
   final String childId;
   const _ClearAllButton({required this.childId});
 
-  Future<void> _clearAll(BuildContext context) async {
+  @override
+  State<_ClearAllButton> createState() => _ClearAllButtonState();
+}
+
+class _ClearAllButtonState extends State<_ClearAllButton> {
+  bool _loading = false;
+
+  Future<void> _clearAll() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -608,31 +615,41 @@ class _ClearAllButton extends StatelessWidget {
       ),
     );
     if (confirmed != true) return;
+    if (!mounted) return;
+
+    // Capture messenger before async gap so it remains valid even if the
+    // widget is removed from the tree while the Firestore call is in flight.
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _loading = true);
 
     try {
       final db = FirebaseFirestore.instance;
       final snap = await db
           .collection('timeRequests')
-          .where('childId', isEqualTo: childId)
+          .where('childId', isEqualTo: widget.childId)
           .get();
       final batch = db.batch();
       for (final doc in snap.docs) {
         batch.delete(doc.reference);
       }
       await batch.commit();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('All requests cleared.')),
+      );
     } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not clear requests. Try again.')),
-        );
-      }
+      debugPrint('_clearAll error: $e');
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not clear requests. Try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return TextButton(
-      onPressed: () => _clearAll(context),
+      onPressed: _loading ? null : _clearAll,
       child: Text('Clear All',
         style: TextStyle(fontSize: 13, color: Colors.grey[600], fontWeight: FontWeight.w600)),
     );
