@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/pairing_service.dart';
 import '../theme/app_theme.dart';
 
@@ -113,6 +114,9 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
       if (!mounted) return;
       setState(() { _sending = false; _sent = true; });
 
+      // Immediately call the first emergency contact on file.
+      unawaited(_callFirstEmergencyContact(childId));
+
       // Auto-cancel SOS active flag after 30 seconds (parent will have seen it).
       // Capture childId into a local so the callback never dereferences a
       // freshly-unpaired (null) childId via `pairing.childId`.
@@ -133,6 +137,45 @@ class _SosScreenState extends State<SosScreen> with SingleTickerProviderStateMix
         _sending = false;
         _error = 'Could not send SOS. Check your internet and try again.';
       });
+    }
+  }
+
+  Future<void> _callFirstEmergencyContact(String childId) async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('children')
+          .doc(childId)
+          .collection('emergency_contacts')
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No emergency contact on file. Ask your parent to add one.'),
+          ),
+        );
+        return;
+      }
+
+      final data = snapshot.docs.first.data();
+      final phone = ((data['phone'] ?? data['phoneNumber'] ?? '') as String).trim();
+
+      if (phone.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Emergency contact has no phone number on file.')),
+        );
+        return;
+      }
+
+      final uri = Uri(scheme: 'tel', path: phone);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      }
+    } catch (e) {
+      debugPrint('Emergency call error: $e');
     }
   }
 
