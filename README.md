@@ -108,13 +108,32 @@ The parent can remotely start an ambient-listen session. `ListenService` records
 
 | Service | Type | Purpose |
 |---|---|---|
-| `MonitorService.kt` | Foreground (`location`) | Keeps the process alive and holds the location permission while GPS reporting runs. |
-| `BrowserMonitorService.kt` | Accessibility | Listens to `TYPE_WINDOW_CONTENT_CHANGED` and `TYPE_VIEW_TEXT_CHANGED` events across browser packages. Extracts URL bar text and page titles and writes each visit directly to Firestore. |
+| `MonitorService.kt` | Foreground (`location`) | Keeps the process alive and holds the location permission while GPS reporting runs. On Android 14+, if the location permission is missing the service starts with a basic notification (no location type) instead of stopping itself — this prevents watchdog restart loops. |
+| `ServiceWatchdogWorker.kt` | WorkManager | 15-minute periodic watchdog. Checks if `MonitorService` is running and restarts it if not. On Android 12+ catches `ForegroundServiceStartNotAllowedException` and falls back to `startService()` with `Result.retry()`. |
+| `BrowserMonitorService.kt` | Accessibility | Listens to `TYPE_WINDOW_CONTENT_CHANGED` and `TYPE_VIEW_TEXT_CHANGED` events across browser packages. Extracts URL bar text and page titles and writes each visit directly to Firestore. Also runs a 30-second watchdog loop that independently checks whether `MonitorService` is running and restarts it if not. |
 | `ListenService.kt` | Foreground (`microphone`) | Ambient listen. Records 5-second AAC chunks at 16 kHz / 24 kbps mono, base64-encodes them, and writes to `children/{id}/listen_chunks`. 15-minute absolute TTL as a battery safety cut-off. |
 | `SirenService.kt` | Foreground (`mediaPlayback`) | Loops a loud alarm sound on `STREAM_ALARM`. `stopWithTask=false` so swiping the app from recents does not silence it. |
 | `AppBlockedActivity.kt` | Activity | Full-screen block overlay shown when the child opens a blocked or over-limit app. Back button suppressed. Includes a time-request picker. |
 | `BootReceiver.kt` | BroadcastReceiver | Restarts `MonitorService` on `BOOT_COMPLETED` so monitoring resumes after a device reboot. |
 | `GuardianMessagingService.kt` | FCM | Receives push commands from the parent (siren, SOS trigger, listen start/stop). |
+
+---
+
+## Background Service Reliability
+
+Three independent layers ensure monitoring survives app swipe, battery optimization, and Android OS restrictions:
+
+### Layer 1 — WorkManager Watchdog (`ServiceWatchdogWorker.kt`)
+A `PeriodicWorkRequest` fires every 15 minutes. It queries `ActivityManager.getRunningServices` and calls `startForegroundService()` if `MonitorService` is not found. On Android 12+ where `ForegroundServiceStartNotAllowedException` can be thrown from a background worker, the code catches the exception, falls back to `startService()`, and returns `Result.retry()` so WorkManager will attempt again at the next interval.
+
+### Layer 2 — Accessibility Service Watchdog (`BrowserMonitorService.kt`)
+The accessibility service is harder for the OS to kill than a foreground service. It runs a 30-second `Handler` loop that independently checks for `MonitorService` and restarts it if missing. This provides a much faster recovery time than WorkManager's 15-minute window.
+
+### Layer 3 — Battery Optimization Exemption (`MainActivity.kt`)
+On first launch, `MainActivity.onCreate()` checks whether the app is already exempted from battery optimization. If not, it fires `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` to prompt the user to allow unrestricted background activity. Without this exemption, the OS aggressively kills foreground services on many Android OEM variants (especially Samsung, Xiaomi, OnePlus).
+
+### Android 14+ Fix
+Prior to this fix, `MonitorService.onCreate()` called `stopSelf()` when the location permission was not yet granted, which caused every watchdog restart to immediately kill the service again. The fix starts the service with a basic (non-location-type) foreground notification when the permission is missing, keeping the process alive until the user grants the permission.
 
 ---
 
