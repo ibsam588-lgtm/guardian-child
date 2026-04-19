@@ -27,6 +27,10 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.util.Calendar
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.guardian.child/monitor"
@@ -38,6 +42,19 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         // NOTE: Do NOT start MonitorService here — it needs location permission
         // and the child must be paired first. Flutter controls it via MethodChannel.
+
+        // Schedule a periodic WorkManager watchdog that restarts MonitorService
+        // every 15 minutes if it has been killed. This is more reliable than
+        // AlarmManager on Android 12+ where exact alarms require extra permission
+        // and foreground service starts from background are blocked.
+        val watchdogRequest = PeriodicWorkRequestBuilder<ServiceWatchdogWorker>(
+            15, TimeUnit.MINUTES
+        ).build()
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "service_watchdog",
+            ExistingPeriodicWorkPolicy.KEEP,
+            watchdogRequest
+        )
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

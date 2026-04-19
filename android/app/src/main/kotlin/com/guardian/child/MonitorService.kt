@@ -7,10 +7,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
-import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 
 class MonitorService : Service() {
 
@@ -85,25 +87,21 @@ class MonitorService : Service() {
 
     /**
      * Called when the user swipes the app away from the recents screen.
-     * Schedule a 1-second delayed restart via AlarmManager so monitoring
-     * continues even after task removal.
+     * Schedules a WorkManager one-time task to restart the service after a
+     * short delay. WorkManager is reliable on Android 12+ whereas AlarmManager
+     * exact alarms require the SCHEDULE_EXACT_ALARM permission and starting a
+     * foreground service from background is blocked on Android 12+.
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val restartIntent = Intent(applicationContext, MonitorService::class.java)
-        restartIntent.setPackage(packageName)
-        val restartPendingIntent = PendingIntent.getService(
-            applicationContext,
-            1,
-            restartIntent,
-            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
-        alarmManager.set(
-            AlarmManager.ELAPSED_REALTIME,
-            SystemClock.elapsedRealtime() + 1000,
-            restartPendingIntent
-        )
-        Log.d(TAG, "onTaskRemoved — scheduled service restart in 1 s")
+        Log.d(TAG, "onTaskRemoved — scheduling WorkManager restart in 2 s")
+        try {
+            val restartRequest = OneTimeWorkRequestBuilder<ServiceWatchdogWorker>()
+                .setInitialDelay(2, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(applicationContext).enqueue(restartRequest)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not schedule watchdog restart: ${e.message}")
+        }
         super.onTaskRemoved(rootIntent)
     }
 

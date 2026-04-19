@@ -64,6 +64,9 @@ dependencies {
     // brings this in at runtime, but we need it on the compile classpath
     // so `FirebaseFirestore` and `Timestamp` resolve during :app compileKotlin.
     implementation 'com.google.firebase:firebase-firestore:25.1.0'
+    // WorkManager watchdog — keeps MonitorService alive after task removal
+    // on Android 12+ where AlarmManager exact alarms are restricted.
+    implementation 'androidx.work:work-runtime-ktx:2.9.1'
 }
 
 flutter { source '../..' }
