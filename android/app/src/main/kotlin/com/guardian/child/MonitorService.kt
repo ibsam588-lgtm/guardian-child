@@ -56,26 +56,27 @@ class MonitorService : Service() {
         super.onCreate()
         createNotificationChannel()
 
-        // On Android 14+, startForeground with foregroundServiceType=location
-        // throws SecurityException if location permission is not granted.
-        // Check before calling to prevent crash.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            if (!hasLocationPermission(this)) {
-                Log.w(TAG, "Location permission not granted — stopping service gracefully")
-                stopSelf()
-                return
-            }
-        }
-
+        // On Android 14+, foregroundServiceType=location requires location
+        // permission. If missing, start without the location type so monitoring
+        // (app limits, browser, SOS) continues even without location access.
         try {
-            startForeground(NOTIFICATION_ID, buildNotification())
-        } catch (e: SecurityException) {
-            // Android 14+: location permission denied after service started
-            Log.w(TAG, "startForeground SecurityException (no location permission): ${e.message}")
-            stopSelf()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                && !hasLocationPermission(this)) {
+                Log.w(TAG, "Location permission not granted — starting without location type")
+                // Start foreground without specifying a service type so Android
+                // doesn't require the location permission for the notification.
+                startForeground(NOTIFICATION_ID, buildNotification(), 0)
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "startForeground failed: ${e.message}")
-            stopSelf()
+            Log.w(TAG, "startForeground failed — retrying without type: ${e.message}")
+            try {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            } catch (e2: Exception) {
+                Log.e(TAG, "startForeground completely failed: ${e2.message}")
+                // Do NOT stopSelf — let the service stay alive for app monitoring
+            }
         }
     }
 
