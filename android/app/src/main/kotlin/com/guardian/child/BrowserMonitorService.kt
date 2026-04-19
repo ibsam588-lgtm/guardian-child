@@ -1,10 +1,13 @@
 package com.guardian.child
 
 import android.accessibilityservice.AccessibilityService
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -127,6 +130,38 @@ class BrowserMonitorService : AccessibilityService() {
 
     private var prefs: SharedPreferences? = null
 
+    // ── MonitorService watchdog ───────────────────────────────────────────────
+    // Accessibility services are exempt from OEM battery-optimisation kills,
+    // so we use this service as a reliable heartbeat to restart MonitorService
+    // whenever the OEM has killed it.
+    private val handler = Handler(Looper.getMainLooper())
+    private val serviceCheckRunnable = object : Runnable {
+        override fun run() {
+            ensureMonitorServiceRunning()
+            handler.postDelayed(this, 30_000L) // check every 30 seconds
+        }
+    }
+
+    private fun ensureMonitorServiceRunning() {
+        val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        @Suppress("DEPRECATION")
+        val running = manager.getRunningServices(Int.MAX_VALUE)
+            .any { it.service.className == MonitorService::class.java.name }
+        if (!running) {
+            Log.d(TAG, "MonitorService not running — restarting")
+            val intent = Intent(this, MonitorService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not restart MonitorService: ${e.message}")
+            }
+        }
+    }
+
     // ── Diagnostics ────────────────────────────────────────────────────────
     // We write a status doc to children/{childId}/browser_history/status so
     // the parent can tell the difference between:
@@ -149,6 +184,11 @@ class BrowserMonitorService : AccessibilityService() {
         prefs = getSharedPreferences("browser_monitor", MODE_PRIVATE)
         // Reset the dedup guard so we re-capture the current URL after a restart
         lastUrl = ""
+        // Start the MonitorService watchdog loop. Accessibility services are
+        // protected from OEM battery-optimisation kills, so this is the most
+        // reliable place to ensure MonitorService keeps running.
+        ensureMonitorServiceRunning()
+        handler.postDelayed(serviceCheckRunnable, 30_000L)
         // Ensure Firebase is initialized in this process before any Firestore access.
         // The FirebaseInitProvider content-provider normally handles this automatically,
         // but accessibility services can be bound before the provider has run on some
@@ -917,10 +957,12 @@ class BrowserMonitorService : AccessibilityService() {
 
     override fun onInterrupt() {
         Log.d(TAG, "BrowserMonitorService interrupted")
+        handler.removeCallbacks(serviceCheckRunnable)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        handler.removeCallbacks(serviceCheckRunnable)
         if (instance === this) instance = null
         Log.d(TAG, "BrowserMonitorService destroyed")
     }

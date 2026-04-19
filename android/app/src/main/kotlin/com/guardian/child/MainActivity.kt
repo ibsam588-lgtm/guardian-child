@@ -55,6 +55,21 @@ class MainActivity : FlutterActivity() {
             ExistingPeriodicWorkPolicy.KEEP,
             watchdogRequest
         )
+
+        // Request battery optimization exemption on first launch so OEM power
+        // managers (Samsung, Xiaomi, etc.) don't kill MonitorService.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val batteryIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    batteryIntent.data = Uri.parse("package:$packageName")
+                    startActivity(batteryIntent)
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Could not request battery optimization exemption: ${e.message}")
+                }
+            }
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
