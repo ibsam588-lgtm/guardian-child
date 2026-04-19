@@ -95,11 +95,15 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
-        <!-- Foreground monitoring service -->
+        <!-- Foreground monitoring service.
+             stopWithTask=false keeps it alive after the user swipes the app
+             away; onTaskRemoved schedules a 1-second AlarmManager restart as
+             an extra safety net on devices that kill the service anyway. -->
         <service
             android:name=".MonitorService"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location"
+            android:stopWithTask="false" />
 
         <!-- Siren alarm service — runs even when the app is closed.
              mediaPlayback type allows audio on API 29+ without the 3-minute shortService kill limit.
